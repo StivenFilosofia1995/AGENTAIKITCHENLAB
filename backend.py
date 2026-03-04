@@ -1,4 +1,4 @@
-﻿"""
+"""
 FastAPI Backend â€” Invoice Agent
 Servidor Ãºnico. app.py es el mÃ³dulo de procesamiento de correos.
 """
@@ -303,6 +303,51 @@ async def trigger_process():
     return {"status": "iniciado", "timestamp": datetime.now().isoformat()}
 
 
+@fastapi_app.post("/api/process-month")
+async def trigger_process_month(body: dict):
+    """Procesa todos los correos de un mes específico (ej: {'mes': 'febrero', 'year': 2026})."""
+    mes = body.get("mes", "").strip()
+    year = body.get("year", datetime.now().year)
+    if not mes:
+        return {"status": "error", "message": "Debes indicar el mes"}
+    if scheduler_state["running"]:
+        return {"status": "ya_ejecutando", "message": "Proceso activo, espera que termine"}
+
+    log_store.add_log(f"Procesamiento por mes iniciado: {mes.capitalize()} {year}", "info")
+    scheduler_state["running"] = True
+    scheduler_state["last_run"] = datetime.now().strftime("%H:%M %d/%m/%Y")
+
+    import sys, io
+
+    class LogCapture(io.TextIOBase):
+        def write(self, msg):
+            msg = msg.strip()
+            if msg:
+                level = "error"   if any(x in msg for x in ["Error", "error", "ERROR", "❌"]) else \
+                        "success" if any(x in msg for x in ["completado", "guardada", "✅", "exitosamente"]) else \
+                        "warning" if "⚠️" in msg else "info"
+                log_store.add_log(msg, level)
+            return len(msg if msg else "")
+        def flush(self): pass
+
+    def _run():
+        old_stdout = sys.stdout
+        sys.stdout = LogCapture()
+        try:
+            app_module.process_emails_for_month(mes, int(year))
+            invalidate_sheets_cache()
+        except Exception as e:
+            import traceback
+            log_store.add_log(f"Error: {e}", "error")
+            log_store.add_log(traceback.format_exc(), "error")
+        finally:
+            sys.stdout = old_stdout
+            scheduler_state["running"] = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"status": "iniciado", "mes": mes, "year": year, "timestamp": datetime.now().isoformat()}
+
+
 @fastapi_app.get("/api/logs")
 async def get_logs():
     return {"logs": log_store.get_logs()}
@@ -374,17 +419,18 @@ async def chat_with_claude(message: dict):
         client = anthropic.Anthropic(api_key=api_key)
         
         # System prompt para que Claude entienda su rol
-        system_prompt = """Eres un asistente del Invoice Agent, un sistema que procesa facturas desde Gmail usando IA.
+        system_prompt = """Eres un asistente del Invoice Agent, sistema que procesa facturas desde Gmail usando IA.
 
 Capacidades disponibles:
-1. Procesar correos: Buscar facturas en Gmail y extraerlas a Excel/Google Sheets
-2. Consultar estadísticas: Ver totales, pendientes, pagadas, vencidas
-3. Ver facturas recientes
-4. Activar/desactivar scheduler automático
+1. Procesar correos recientes: Buscar facturas en Gmail y guardarlas en Google Sheets
+2. Procesar correos por MES ESPECÍFICO: Si el usuario menciona un mes (enero, febrero, etc.) puedes buscar TODOS los correos de ese mes completo en Gmail y extraer las facturas
+3. Consultar estadísticas: Ver totales, pendientes, pagadas, vencidas
+4. Ver facturas registradas por mes
+5. Scheduler automático: activar/desactivar procesamiento periódico
 
-Cuando el usuario te pida procesar facturas o revisar el correo, responde confirmando que puedes hacerlo y explica brevemente qué sucederá. Si te preguntan sobre estadísticas o el estado del sistema, proporciona información clara.
+Cuando el usuario mencione un mes específico (ej: "procesa febrero", "busca las facturas de enero", "revisa marzo 2026"), confirma que buscarás TODOS los correos de ese mes completo en Gmail.
 
-Sé conciso, profesional y útil."""
+Sé conciso y profesional. Responde siempre en español."""
 
         # Llamar a Claude
         response = client.messages.create(
@@ -399,15 +445,41 @@ Sé conciso, profesional y útil."""
         
         assistant_response = response.content[0].text if response.content else ""
         
-        # Detectar intención de procesar correos
+        # Detectar intención y mes específico
         intent = None
+        intent_mes = None
+        intent_year = datetime.now().year
         lower_msg = user_msg.lower()
-        if any(keyword in lower_msg for keyword in ["procesar", "correo", "email", "factura", "gmail", "buscar", "extraer"]):
-            intent = "process_emails"
-        
+
+        # Detectar mes mencionado
+        meses_map = {
+            "enero": "enero", "febrero": "febrero", "marzo": "marzo",
+            "abril": "abril", "mayo": "mayo", "junio": "junio",
+            "julio": "julio", "agosto": "agosto", "septiembre": "septiembre",
+            "octubre": "octubre", "noviembre": "noviembre", "diciembre": "diciembre"
+        }
+        for mes_es in meses_map:
+            if mes_es in lower_msg:
+                intent_mes = mes_es
+                break
+
+        # Detectar año mencionado
+        import re as _re
+        year_match = _re.search(r'\b(202[0-9])\b', lower_msg)
+        if year_match:
+            intent_year = int(year_match.group(1))
+
+        if any(kw in lower_msg for kw in ["procesar", "correo", "email", "factura", "gmail", "buscar", "extraer", "revisar"]):
+            if intent_mes:
+                intent = "process_month"
+            else:
+                intent = "process_emails"
+
         return {
             "response": assistant_response,
             "intent": intent,
+            "mes": intent_mes,
+            "year": intent_year,
             "timestamp": datetime.now().isoformat()
         }
         
