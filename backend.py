@@ -271,18 +271,38 @@ async def get_statistics(mes: str = None):
 
 
 @fastapi_app.get("/api/invoices")
-async def get_invoices(limit: int = 200, mes: str = None):
+async def get_invoices(limit: int = 1000, mes: str = None):
     try:
         df = read_sheets_df()
         if df is None or df.empty:
             return {"invoices": [], "total": 0}
         if mes and "Mes" in df.columns:
             df = df[df["Mes"].str.strip().str.lower() == mes.strip().lower()]
-        records = df.tail(limit).fillna("N/A").to_dict(orient="records")
+        # Usar todos los registros sin cortar con tail() para no perder meses
+        records = df.fillna("N/A").to_dict(orient="records")
+        if limit:
+            records = records[:limit]
         return {"invoices": records, "total": len(df)}
     except Exception as e:
         log_store.add_log(f"Error obteniendo facturas: {e}", "error")
         return {"invoices": [], "total": 0, "error": str(e)}
+
+
+@fastapi_app.get("/api/months")
+async def get_months():
+    """Devuelve los meses que tienen datos en el Google Sheets."""
+    MONTH_ORDER = ["enero","febrero","marzo","abril","mayo","junio",
+                   "julio","agosto","septiembre","octubre","noviembre","diciembre"]
+    try:
+        df = read_sheets_df()
+        if df is None or df.empty or "Mes" not in df.columns:
+            return {"months": []}
+        months = df["Mes"].str.strip().str.lower().dropna().unique().tolist()
+        months = [m for m in months if m]  # filtrar vacíos
+        months_sorted = sorted(months, key=lambda m: MONTH_ORDER.index(m) if m in MONTH_ORDER else 99)
+        return {"months": months_sorted}
+    except Exception as e:
+        return {"months": [], "error": str(e)}
 
 
 @fastapi_app.get("/api/invoices/by-status/{status}")
