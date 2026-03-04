@@ -1,0 +1,28 @@
+# Credenciales y secretos — NUNCA subir al repo
+.env
+service_account.json
+
+# Entornos virtuales Python
+AGENT_AI_ENV/
+agent_ia_env/
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Datos locales generados
+processed_emails.json
+data/processed_emails.json
+facturas_seguimiento.xlsx
+*.xlsx
+
+# IDEs
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
