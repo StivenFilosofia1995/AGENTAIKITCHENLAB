@@ -146,7 +146,7 @@ header{
 
 /* ── TABLA FULL COLS ── */
 .tw{overflow-x:auto;}
-table{width:100%;border-collapse:collapse;min-width:1800px;}
+table{width:100%;border-collapse:collapse;min-width:3200px;}
 thead th{
   padding:10px 12px;text-align:left;font-size:10px;letter-spacing:.08em;
   text-transform:uppercase;color:var(--dim2);border-bottom:1px solid var(--border);
@@ -347,12 +347,14 @@ tbody td{padding:9px 12px;color:var(--text);font-size:11px;white-space:nowrap;}
       <div class="pa"></div>
       <div class="ps" id="ps4"><div class="pi">📊</div><div class="pl">Excel</div></div>
     </div>
+    <!-- FILTRO MES -->
+    <div class="mes-bar" id="mes-bar">
+      <button class="mes-btn active" onclick="setMes(null,this)">Todos</button>
+    </div>
     <!-- TABLA -->
     <div class="tw">
       <table>
-        <thead>
-          <tr><th>Mes</th><th>Fecha</th><th>Número</th><th>Proveedor</th><th>Subtotal</th><th>IVA</th><th>Total</th><th>Estado</th><th>Cliente</th></tr>
-        </thead>
+        <thead><tr id="thead-row"><th>Mes</th><th>Fecha</th><th>Número</th><th>Proveedor</th><th>Subtotal</th><th>IVA</th><th>Total</th><th>Estado</th><th>Cliente</th></tr></thead>
         <tbody id="tbody">
           <tr><td colspan="9"><div class="empty"><div class="ei">⬡</div>Cargando facturas...</div></td></tr>
         </tbody>
@@ -502,9 +504,26 @@ const MESES_CAP = {
 function setMes(mes, btn) {
   activeMes = mes;
   document.querySelectorAll('.mes-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
+  if (btn) btn.classList.add('active');
   loadStats();
   loadInvoices();
+}
+
+async function loadMonths() {
+  try {
+    const r = await fetch(`${BASE}/api/months`);
+    if (!r.ok) return;
+    const d = await r.json();
+    const bar = document.getElementById('mes-bar');
+    if (!bar || !d.months || !d.months.length) return;
+    // Capitalizar nombre del mes
+    const cap = m => m.charAt(0).toUpperCase() + m.slice(1);
+    // Construir botones: Todos + un botón por mes
+    bar.innerHTML = `<button class="mes-btn ${activeMes===null?'active':''}" onclick="setMes(null,this)">Todos</button>`
+      + d.months.map(m =>
+          `<button class="mes-btn ${activeMes===m?'active':''}" onclick="setMes('${m}',this)">${cap(m)}</button>`
+        ).join('');
+  } catch(e) { console.warn('loadMonths:', e); }
 }
 
 const fmtN = (n,d=0) => n==null ? '—' :
@@ -534,8 +553,8 @@ async function loadStats() {
 async function loadInvoices() {
   try {
     const url = activeMes
-      ? `${BASE}/api/invoices?limit=200&mes=${activeMes}`
-      : `${BASE}/api/invoices?limit=200`;
+      ? `${BASE}/api/invoices?limit=2000&mes=${activeMes}`
+      : `${BASE}/api/invoices?limit=2000`;
     const r = await fetch(url);
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
@@ -543,47 +562,68 @@ async function loadInvoices() {
   } catch { renderTable([]); }
 }
 
+// Columnas numéricas del Sheets
+const NUM_COLS = new Set([
+  'Subtotal','Descuento','IVA','Rete IVA','Rete ICA','Impto Consumo',
+  'Propina','Otros Impuestos','Retención en la fuente','Administración',
+  'Utilidad','Imprevistos','Valor Total','Valor Pagado','Valor Por Pagar'
+]);
+
+function parseNum(v) {
+  if (!v || v === 'N/A' || v === '') return null;
+  // Formato colombiano: '1.234.567' o '1.234,56'
+  const s = String(v).trim().replace(/\./g,'').replace(',','.');
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
 function renderTable(rows) {
   const tb = document.getElementById('tbody');
+  const theadRow = document.getElementById('thead-row');
+
   if (!rows.length) {
-    tb.innerHTML = `<tr><td colspan="9"><div class="empty"><div class="ei">⬡</div>
+    theadRow.innerHTML = '<th>Sin datos</th>';
+    tb.innerHTML = `<tr><td colspan="1"><div class="empty"><div class="ei">⬡</div>
       Sin facturas registradas. Ejecuta "Procesar Emails" para comenzar.</div></td></tr>`;
     return;
   }
-  const k = Object.keys(rows[0]);
-  const col = kws => k.find(c => kws.some(w => c.toLowerCase().includes(w))) || '';
-  const cMes  = col(['mes']);
-  const cFech = col(['fecha factura','fecha emisión','fecha emision','fecha']);
-  const cNum  = col(['número factura','factura','numero','n°']);
-  const cProv = col(['proveedor','emisor','empresa','razon']);
-  const cSub  = col(['subtotal']);
-  const cIva  = col(['iva']);
-  const cTot  = col(['valor total','total','monto','valor']);
-  const cEst  = col(['estado','status']);
-  const cCli  = col(['cliente']);
-  const badge = e => {
-    const s = (e||'').toString().toUpperCase();
-    return s==='PENDIENTE' ? `<span class="badge bp">${s}</span>` :
-           s==='PAGADA'    ? `<span class="badge bg">${s}</span>` :
-           s==='VENCIDA'   ? `<span class="badge br">${s}</span>` :
-                             `<span class="badge bd">${esc(s)||'N/A'}</span>`;
+
+  // Columnas dinámicas desde los datos reales del Sheets
+  const cols = Object.keys(rows[0]);
+
+  // Renderizar encabezados
+  theadRow.innerHTML = cols.map(c => `<th>${esc(c)}</th>`).join('');
+
+  const badge = s => {
+    const u = (s||'').toString().toUpperCase();
+    return u==='PENDIENTE' ? `<span class="badge bp">${u}</span>` :
+           u==='PAGADA'    ? `<span class="badge bg">${u}</span>` :
+           u==='VENCIDA'   ? `<span class="badge br">${u}</span>` :
+                             `<span class="badge bd">${esc(u)||'N/A'}</span>`;
   };
-  tb.innerHTML = rows.map(r => {
-    const sub = r[cSub] && r[cSub]!=='N/A' && r[cSub]!=='0' ? fmtN(Number.parseFloat(r[cSub])) : 'N/A';
-    const iva = r[cIva] && r[cIva]!=='N/A' && r[cIva]!=='0' ? fmtN(Number.parseFloat(r[cIva])) : 'N/A';
-    const tot = r[cTot] && r[cTot]!=='N/A' && r[cTot]!=='0' ? fmtN(Number.parseFloat(r[cTot])) : 'N/A';
-    return `<tr>
-      <td style="color:var(--dim2);font-size:11px">${esc(r[cMes]||'N/A')}</td>
-      <td style="color:var(--dim2);font-size:11px">${esc(r[cFech]||'N/A')}</td>
-      <td style="color:var(--accent);font-weight:600">${esc(r[cNum]||'N/A')}</td>
-      <td>${esc(r[cProv]||'N/A')}</td>
-      <td style="font-weight:600">${sub}</td>
-      <td style="color:var(--warning);font-weight:600">${iva}</td>
-      <td style="color:var(--success);font-weight:700">${tot}</td>
-      <td>${badge(r[cEst])}</td>
-      <td style="color:var(--dim2);font-size:11px">${esc(r[cCli]||'N/A')}</td>
-    </tr>`;
-  }).join('');
+
+  const cell = (col, val) => {
+    const v = (val === undefined || val === null) ? 'N/A' : String(val);
+    if (col === 'Estado') return `<td>${badge(v)}</td>`;
+    if (col === 'Número Factura') return `<td style="color:var(--accent);font-weight:600;white-space:nowrap">${esc(v)}</td>`;
+    if (col === 'Mes') return `<td style="color:var(--dim2);font-size:11px;white-space:nowrap">${esc(v)}</td>`;
+    if (col === 'Clasificación') return `<td style="color:#a78bfa">${esc(v)}</td>`;
+    if (col === 'Observaciones' || col === 'Cotización Inventto') return `<td style="color:var(--dim2);max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${esc(v)}">${esc(v)}</td>`;
+    if (NUM_COLS.has(col)) {
+      const n = parseNum(v);
+      if (n !== null && n !== 0) {
+        const color = col==='IVA'||col==='Rete IVA'||col==='Rete ICA' ? 'color:var(--warning);' :
+                      col==='Valor Total' ? 'color:var(--success);font-weight:700;' : 'font-weight:600;';
+        return `<td style="${color}white-space:nowrap">${fmtN(n)}</td>`;
+      }
+      return `<td style="color:var(--dim)">N/A</td>`;
+    }
+    return `<td>${esc(v)}</td>`;
+  };
+
+  tb.innerHTML = rows.map(r =>
+    `<tr>${cols.map(c => cell(c, r[c])).join('')}</tr>`
+  ).join('');
 }
 
 // ── TERMINAL ───────────────────────────────────────────────────────────────
@@ -968,7 +1008,8 @@ function startHttpPolling() {
     try {
       const r = await fetch(`${BASE}/api/logs`);
       if (!r.ok) return;
-      const logs = await r.json();
+      const data = await r.json();
+      const logs = Array.isArray(data) ? data : (data.logs || []);
       const newLogs = logs.slice(lastLogCount);
       newLogs.forEach(d => {
         if (d.message) {
@@ -1030,11 +1071,15 @@ function schedRec() {
 
 // ── INIT ───────────────────────────────────────────────────────────────────
 async function init() {
+  await loadMonths();
   await loadStats();
   await loadInvoices();
   await loadSchedulerState();
   connectWS();
+  // Refrescar datos cada 2 minutos
   setInterval(() => { loadStats(); loadInvoices(); }, 120000);
+  // Refrescar meses cada 5 minutos (por si se agregan nuevos)
+  setInterval(loadMonths, 300000);
 }
 document.addEventListener('DOMContentLoaded', init);
 </script>
