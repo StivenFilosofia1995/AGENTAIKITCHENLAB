@@ -138,17 +138,23 @@ header{
 .btn-sched:hover{background:rgba(123,47,255,.1);box-shadow:0 0 18px rgba(123,47,255,.2);}
 .btn-sched.active{background:rgba(123,47,255,.12);border-color:#a78bfa;}
 
-/* ── TABLA ── */
+/* ── MES FILTER ── */
+.mes-bar{display:flex;flex-wrap:wrap;gap:6px;padding:12px 20px;border-bottom:1px solid var(--border);background:var(--surface2);}
+.mes-btn{padding:5px 12px;font-size:10px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;border:1px solid var(--border);border-radius:100px;background:transparent;color:var(--dim2);font-family:var(--font);cursor:pointer;transition:all .2s;}
+.mes-btn:hover{color:var(--text);border-color:var(--dim2);}
+.mes-btn.active{border-color:var(--accent);color:var(--accent);background:rgba(0,212,255,.08);box-shadow:0 0 10px rgba(0,212,255,.15);}
+
+/* ── TABLA FULL COLS ── */
 .tw{overflow-x:auto;}
-table{width:100%;border-collapse:collapse;}
+table{width:100%;border-collapse:collapse;min-width:1800px;}
 thead th{
-  padding:11px 16px;text-align:left;font-size:10px;letter-spacing:.1em;
+  padding:10px 12px;text-align:left;font-size:10px;letter-spacing:.08em;
   text-transform:uppercase;color:var(--dim2);border-bottom:1px solid var(--border);
-  background:var(--surface2);white-space:nowrap;
+  background:var(--surface2);white-space:nowrap;position:sticky;top:0;z-index:2;
 }
 tbody tr{border-bottom:1px solid var(--border2);transition:background .15s;}
 tbody tr:hover{background:rgba(0,212,255,.025);}
-tbody td{padding:11px 16px;color:var(--text);font-size:12px;white-space:nowrap;}
+tbody td{padding:9px 12px;color:var(--text);font-size:11px;white-space:nowrap;}
 .badge{display:inline-block;padding:3px 10px;border-radius:100px;font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;}
 .bp{background:rgba(255,184,0,.1);color:var(--warning);border:1px solid rgba(255,184,0,.2);}
 .bg{background:rgba(0,255,136,.08);color:var(--success);border:1px solid rgba(0,255,136,.18);}
@@ -485,6 +491,21 @@ const BASE = window.location.origin;
 const WS   = BASE.replace(/^http/, 'ws');
 let ws = null, reconnN = 0, reconnTmr = null, processing = false;
 let currentMode = 'interval';
+let activeMes = null; // mes actualmente filtrado (null = todos)
+
+const MESES_CAP = {
+  enero:'Enero', febrero:'Febrero', marzo:'Marzo', abril:'Abril',
+  mayo:'Mayo', junio:'Junio', julio:'Julio', agosto:'Agosto',
+  septiembre:'Septiembre', octubre:'Octubre', noviembre:'Noviembre', diciembre:'Diciembre'
+};
+
+function setMes(mes, btn) {
+  activeMes = mes;
+  document.querySelectorAll('.mes-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  loadStats();
+  loadInvoices();
+}
 
 const fmtN = (n,d=0) => n==null ? '—' :
   new Intl.NumberFormat('es-CO',{minimumFractionDigits:d,maximumFractionDigits:d}).format(n);
@@ -494,7 +515,8 @@ const now  = () => new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:
 // ── STATS ──────────────────────────────────────────────────────────────────
 async function loadStats() {
   try {
-    const r = await fetch(`${BASE}/api/stats`);
+    const url = activeMes ? `${BASE}/api/stats?mes=${activeMes}` : `${BASE}/api/stats`;
+    const r = await fetch(url);
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     document.getElementById('s-total').textContent = d.total      ?? '0';
@@ -503,14 +525,18 @@ async function loadStats() {
     document.getElementById('s-venc').textContent  = d.vencidas   ?? '0';
     document.getElementById('s-cop').textContent   = '$' + fmtN(d.total_cop);
     document.getElementById('s-usd').textContent   = '$' + fmtN(d.total_usd, 2);
-    document.getElementById('upd').textContent = `Actualizado ${now()}`;
+    const mesLabel = activeMes ? ` — ${MESES_CAP[activeMes]||activeMes}` : '';
+    document.getElementById('upd').textContent = `Actualizado ${now()}${mesLabel}`;
   } catch(e) { console.warn('stats:', e); }
 }
 
 // ── FACTURAS ───────────────────────────────────────────────────────────────
 async function loadInvoices() {
   try {
-    const r = await fetch(`${BASE}/api/invoices?limit=30`);
+    const url = activeMes
+      ? `${BASE}/api/invoices?limit=200&mes=${activeMes}`
+      : `${BASE}/api/invoices?limit=200`;
+    const r = await fetch(url);
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     renderTable(d.invoices || []);
