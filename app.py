@@ -176,16 +176,118 @@ def connect_imap() -> imaplib.IMAP4_SSL:
 
 
 def search_invoice_emails(mail: imaplib.IMAP4_SSL) -> list:
-    """Devuelve los IDs de los 20 correos más recientes."""
+    """Devuelve los IDs de los 50 correos más recientes."""
     try:
         _, data = mail.search(None, "ALL")
         all_ids = [uid.decode() for uid in data[0].split()]
-        recientes = all_ids[-20:]
+        recientes = all_ids[-50:]
         print(f"📬 {len(recientes)} correos para analizar")
         return recientes
     except Exception as e:
         print(f"❌ Error buscando correos: {e}")
         return []
+
+
+# Mapa de meses español → número
+_MES_NUM = {
+    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
+    "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
+    "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12
+}
+# Nombres en inglés para IMAP (formato requerido: "01-Jan-2026")
+_MES_EN = {
+    1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+    7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
+}
+
+
+def search_emails_by_month(mail: imaplib.IMAP4_SSL, mes_nombre: str, year: int = None) -> list:
+    """Busca en Gmail todos los correos del mes especificado usando filtro IMAP por fecha."""
+    import calendar
+    mes_nombre = mes_nombre.lower().strip()
+    mes_num = _MES_NUM.get(mes_nombre)
+    if not mes_num:
+        print(f"❌ Mes no reconocido: {mes_nombre}")
+        return []
+
+    if year is None:
+        year = datetime.now().year
+
+    # Calcular rango de fechas del mes
+    ultimo_dia = calendar.monthrange(year, mes_num)[1]
+    fecha_inicio = f"01-{_MES_EN[mes_num]}-{year}"
+    # Primer día del mes siguiente
+    mes_siguiente = mes_num + 1 if mes_num < 12 else 1
+    year_siguiente = year if mes_num < 12 else year + 1
+    fecha_fin = f"01-{_MES_EN[mes_siguiente]}-{year_siguiente}"
+
+    try:
+        # IMAP SINCE/BEFORE para filtrar por rango de fechas
+        criterio = f'(SINCE "{fecha_inicio}" BEFORE "{fecha_fin}")'
+        _, data = mail.search(None, criterio)
+        ids = [uid.decode() for uid in data[0].split() if uid]
+        print(f"📬 {len(ids)} correos encontrados en {mes_nombre.capitalize()} {year}")
+        return ids
+    except Exception as e:
+        print(f"❌ Error buscando correos por mes: {e}")
+        return []
+
+
+def process_emails_for_month(mes_nombre: str, year: int = None):
+    """Procesa TODOS los correos de un mes específico, ignorando el cache de procesados."""
+    if not EMAIL_USER or not EMAIL_PASS:
+        print("❌ Credenciales de correo no configuradas en .env")
+        return
+    if not ANTHROPIC_API_KEY:
+        print("❌ ANTHROPIC_API_KEY no configurada en .env")
+        return
+
+    mes_nombre_cap = mes_nombre.strip().capitalize()
+    if year is None:
+        year = datetime.now().year
+
+    print(f"🗓️  Iniciando procesamiento del mes: {mes_nombre_cap} {year}")
+    setup_sheets()
+
+    try:
+        mail = connect_imap()
+    except Exception as e:
+        print(f"❌ Error de conexión IMAP: {e}")
+        return
+
+    email_ids = search_emails_by_month(mail, mes_nombre, year)
+    if not email_ids:
+        print(f"📭 No se encontraron correos en {mes_nombre_cap} {year}")
+        return
+
+    # Para procesamiento por mes NO se usa el cache de IDs procesados
+    # — se reprocesa todo el mes para asegurar completitud
+    facturas_encontradas = 0
+    for eid in email_ids:
+        try:
+            msg_data = fetch_email(mail, eid)
+            if not msg_data:
+                continue
+            msg = email.message_from_bytes(msg_data)
+            asunto = _decode_str(msg.get("Subject", ""))
+            texto = extract_email_text(msg)
+            if not texto.strip():
+                print(f"⏭️  Sin texto: {asunto[:50]}")
+                continue
+            print(f"🔍 Analizando: {asunto[:60]}")
+            datos = extract_invoice_data(texto, asunto)
+            if datos:
+                # Forzar el mes del parámetro si el campo Mes está vacío
+                if not datos.get("mes") or datos.get("mes") == "N/A":
+                    datos["mes"] = mes_nombre_cap
+                save_to_sheets(datos)
+                facturas_encontradas += 1
+                print(f"✅ Factura guardada: {datos.get('numero_factura','?')} – {datos.get('proveedor','?')}")
+        except Exception as e:
+            print(f"⚠️  Error procesando correo {eid}: {e}")
+            continue
+
+    print(f"🏁 Procesamiento {mes_nombre_cap} completado: {facturas_encontradas} facturas guardadas de {len(email_ids)} correos")
 
 
 # ── EXTRACCIÓN DE TEXTO ───────────────────────────────────────────────────────
