@@ -176,16 +176,29 @@ def connect_imap() -> imaplib.IMAP4_SSL:
 
 
 def search_invoice_emails(mail: imaplib.IMAP4_SSL) -> list:
-    """Devuelve los IDs de los 50 correos más recientes."""
+    """Devuelve los IDs de los 200 correos más recientes, buscando en INBOX y All Mail."""
+    all_ids_set = set()
+    folders_to_try = ['INBOX', '"[Gmail]/All Mail"', '[Gmail]/All Mail', 'All Mail']
+    for folder in folders_to_try:
+        try:
+            status, _ = mail.select(folder)
+            if status != 'OK':
+                continue
+            _, data = mail.search(None, "ALL")
+            ids = [uid.decode() for uid in data[0].split() if uid]
+            all_ids_set.update(ids)
+            if ids:
+                break  # encontrado el folder correcto, detener búsqueda
+        except Exception:
+            continue
+    # Restaurar INBOX
     try:
-        _, data = mail.search(None, "ALL")
-        all_ids = [uid.decode() for uid in data[0].split()]
-        recientes = all_ids[-50:]
-        print(f"📬 {len(recientes)} correos para analizar")
-        return recientes
-    except Exception as e:
-        print(f"❌ Error buscando correos: {e}")
-        return []
+        mail.select('INBOX')
+    except Exception:
+        pass
+    recientes = sorted(all_ids_set, key=lambda x: int(x) if x.isdigit() else 0)[-200:]
+    print(f"📬 {len(recientes)} correos para analizar")
+    return recientes
 
 
 # Mapa de meses español → número
@@ -202,7 +215,7 @@ _MES_EN = {
 
 
 def search_emails_by_month(mail: imaplib.IMAP4_SSL, mes_nombre: str, year: int = None) -> list:
-    """Busca en Gmail todos los correos del mes especificado usando filtro IMAP por fecha."""
+    """Busca en Gmail TODOS los correos del mes usando IMAP SINCE/BEFORE, revisando All Mail."""
     import calendar
     mes_nombre = mes_nombre.lower().strip()
     mes_num = _MES_NUM.get(mes_nombre)
@@ -213,24 +226,35 @@ def search_emails_by_month(mail: imaplib.IMAP4_SSL, mes_nombre: str, year: int =
     if year is None:
         year = datetime.now().year
 
-    # Calcular rango de fechas del mes
     ultimo_dia = calendar.monthrange(year, mes_num)[1]
     fecha_inicio = f"01-{_MES_EN[mes_num]}-{year}"
-    # Primer día del mes siguiente
     mes_siguiente = mes_num + 1 if mes_num < 12 else 1
     year_siguiente = year if mes_num < 12 else year + 1
     fecha_fin = f"01-{_MES_EN[mes_siguiente]}-{year_siguiente}"
+    criterio = f'(SINCE "{fecha_inicio}" BEFORE "{fecha_fin}")'
 
+    all_ids_set = set()
+    # Buscar en todos los folders relevantes de Gmail
+    folders_to_try = ['INBOX', '"[Gmail]/All Mail"', '[Gmail]/All Mail',
+                      '"[Gmail]/Starred"', 'All Mail']
+    for folder in folders_to_try:
+        try:
+            status, _ = mail.select(folder, readonly=True)
+            if status != 'OK':
+                continue
+            _, data = mail.search(None, criterio)
+            ids = [uid.decode() for uid in data[0].split() if uid]
+            all_ids_set.update(ids)
+        except Exception:
+            continue
+    # Restaurar INBOX
     try:
-        # IMAP SINCE/BEFORE para filtrar por rango de fechas
-        criterio = f'(SINCE "{fecha_inicio}" BEFORE "{fecha_fin}")'
-        _, data = mail.search(None, criterio)
-        ids = [uid.decode() for uid in data[0].split() if uid]
-        print(f"📬 {len(ids)} correos encontrados en {mes_nombre.capitalize()} {year}")
-        return ids
-    except Exception as e:
-        print(f"❌ Error buscando correos por mes: {e}")
-        return []
+        mail.select('INBOX')
+    except Exception:
+        pass
+    ids = sorted(all_ids_set, key=lambda x: int(x) if x.isdigit() else 0)
+    print(f"📬 {len(ids)} correos encontrados en {mes_nombre.capitalize()} {year}")
+    return ids
 
 
 def process_emails_for_month(mes_nombre: str, year: int = None):
@@ -279,7 +303,7 @@ def process_emails_for_month(mes_nombre: str, year: int = None):
                 # Forzar el mes al procesado si Gemini no lo detectó
                 if not datos.get("mes") or str(datos.get("mes")).upper() in ("", "N/A"):
                     datos["mes"] = mes_nombre_cap
-                save_to_sheets(datos, from_)
+                save_to_sheets(datos, from_, forced_mes=mes_nombre_cap)
                 facturas_encontradas += 1
                 print(f"✅ Factura guardada: {datos.get('numero_factura','?')} – {datos.get('proveedor','?')}")
         except Exception as e:
@@ -721,34 +745,59 @@ CONTENIDO COMPLETO:
         return None
 
 
-def _is_duplicate_invoice(numero_factura: str, mes_nombre: str = None) -> tuple:
+def _is_duplicate_invoice(numero_factura: str, mes_nombre: str = None,
+                           proveedor: str = None, fecha: str = None) -> tuple:
     """Busca la factura en TODAS las hojas mensuales.
     Retorna (encontrado: bool, fila_num: int, worksheet_object).
-    Si numero_factura es N/A/vacío devuelve (False, -1, None)."""
-    if not numero_factura or str(numero_factura).strip() in ("", "N/A"):
+    Cuando numero_factura es N/A usa clave compuesta proveedor+fecha como fallback."""
+    num_clean = str(numero_factura).strip() if numero_factura else ""
+    use_num   = bool(num_clean and num_clean not in ("", "N/A"))
+    # Clave secundaria para facturas sin número
+    prov_clean  = str(proveedor or "").strip().lower()
+    fecha_clean = str(fecha or "").strip()
+    use_composite = (not use_num) and bool(prov_clean and prov_clean != "n/a")
+    if not use_num and not use_composite:
         return False, -1, None
-    num_clean = str(numero_factura).strip()
+
     hojas_revisadas = set()
     try:
-        # 1) Revisar todas las hojas existentes
         all_ws = get_all_monthly_worksheets()
         for ws in all_ws:
             hojas_revisadas.add(ws.title)
             try:
-                col_values = _api_call_with_retry(ws.col_values, 3)  # col 3 = "Número Factura"
-                for i, val in enumerate(col_values[1:], start=2):    # fila 1=cabecera, fila 2=primer dato
-                    if str(val).strip() == num_clean:
-                        return True, i, ws
+                if use_num:
+                    col_values = _api_call_with_retry(ws.col_values, 3)  # col 3 = Número Factura
+                    for i, val in enumerate(col_values[1:], start=2):
+                        if str(val).strip() == num_clean:
+                            return True, i, ws
+                elif use_composite:
+                    # Leer col 2 (Fecha) y col 4 (Proveedor) para clave compuesta
+                    col_fecha = _api_call_with_retry(ws.col_values, 2)
+                    col_prov  = _api_call_with_retry(ws.col_values, 4)
+                    for i in range(1, max(len(col_fecha), len(col_prov))):
+                        v_prov  = str(col_prov[i]).strip().lower()  if i < len(col_prov)  else ""
+                        v_fecha = str(col_fecha[i]).strip()         if i < len(col_fecha) else ""
+                        if v_prov == prov_clean and (not fecha_clean or v_fecha == fecha_clean):
+                            return True, i + 1, ws
             except Exception:
                 continue
-        # 2) Si se especificó un mes y su hoja no estaba en get_all_monthly_worksheets, revisarla igual
+        # Si la hoja del mes no estaba listada, revisarla también
         if mes_nombre and mes_nombre not in hojas_revisadas:
             try:
                 ws = get_sheet(mes_nombre)
-                col_values = _api_call_with_retry(ws.col_values, 3)
-                for i, val in enumerate(col_values[1:], start=2):
-                    if str(val).strip() == num_clean:
-                        return True, i, ws
+                if use_num:
+                    col_values = _api_call_with_retry(ws.col_values, 3)
+                    for i, val in enumerate(col_values[1:], start=2):
+                        if str(val).strip() == num_clean:
+                            return True, i, ws
+                elif use_composite:
+                    col_fecha = _api_call_with_retry(ws.col_values, 2)
+                    col_prov  = _api_call_with_retry(ws.col_values, 4)
+                    for i in range(1, max(len(col_fecha), len(col_prov))):
+                        v_prov  = str(col_prov[i]).strip().lower()  if i < len(col_prov)  else ""
+                        v_fecha = str(col_fecha[i]).strip()         if i < len(col_fecha) else ""
+                        if v_prov == prov_clean and (not fecha_clean or v_fecha == fecha_clean):
+                            return True, i + 1, ws
             except Exception:
                 pass
         return False, -1, None
@@ -792,27 +841,36 @@ def _build_invoice_row(invoice_data: dict, mes_nombre: str) -> list:
 
 
 # ── GUARDAR EN GOOGLE SHEETS ──────────────────────────────────────────────────
-def save_to_sheets(invoice_data: dict, email_from: str):
-    """INSERT si la factura no existe, UPDATE si ya existe con datos incompletos."""
+def save_to_sheets(invoice_data: dict, email_from: str, forced_mes: str = None):
+    """INSERT si la factura no existe, UPDATE si ya existe con datos incompletos.
+    forced_mes: si se provee, fuerza ese mes ignorando la fecha de la factura."""
     try:
         numero    = str(invoice_data.get("numero_factura") or "N/A")
         proveedor = str(invoice_data.get("proveedor")      or "N/A")
 
-        # ── 1. Determinar el mes ANTES de cualquier otra cosa ──────────────
-        fecha_factura_str = str(invoice_data.get("fecha_factura") or "N/A")
+        # ── 1. Determinar el mes ────────────────────────────────────────────
         meses_list = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
                       "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
-        try:
-            if "/" in fecha_factura_str:
-                mes_num  = int(fecha_factura_str.split("/")[1])
-                mes_nombre = meses_list[mes_num - 1] if 1 <= mes_num <= 12 else meses_list[datetime.now().month - 1]
-            else:
+        if forced_mes:
+            # El usuario pidió un mes específico: siempre respetar esa hoja
+            mes_nombre = forced_mes.strip().capitalize()
+        else:
+            fecha_factura_str = str(invoice_data.get("fecha_factura") or "N/A")
+            try:
+                if "/" in fecha_factura_str:
+                    mes_num    = int(fecha_factura_str.split("/")[1])
+                    mes_nombre = meses_list[mes_num - 1] if 1 <= mes_num <= 12 else meses_list[datetime.now().month - 1]
+                else:
+                    mes_nombre = meses_list[datetime.now().month - 1]
+            except Exception:
                 mes_nombre = meses_list[datetime.now().month - 1]
-        except Exception:
-            mes_nombre = meses_list[datetime.now().month - 1]
 
-        # ── 2. Buscar duplicado en TODAS las hojas ─────────────────────────
-        found, dup_row, dup_ws = _is_duplicate_invoice(numero, mes_nombre)
+        fecha_factura_str = str(invoice_data.get("fecha_factura") or "N/A")
+
+        # ── 2. Buscar duplicado (número o clave compuesta proveedor+fecha) ─
+        found, dup_row, dup_ws = _is_duplicate_invoice(
+            numero, mes_nombre, proveedor, fecha_factura_str
+        )
 
         if found and dup_ws is not None:
             # UPDATE: si el dato nuevo tiene valor_total > 0 y el existente es 0/vacío, actualizar
