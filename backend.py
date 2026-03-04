@@ -106,8 +106,11 @@ def run_process_with_logs():
         log_store.add_log(f"Aviso limpiando cache: {ex}", "warning")
 
     try:
-        log_store.add_log("Iniciando procesamiento de correos...", "info")
-        app_module.process_emails()
+        mes_actual = ["enero","febrero","marzo","abril","mayo","junio",
+                      "julio","agosto","septiembre","octubre","noviembre","diciembre"][datetime.now().month - 1]
+        year_actual = datetime.now().year
+        log_store.add_log(f"Iniciando procesamiento — {mes_actual.capitalize()} {year_actual}", "info")
+        app_module.process_emails_for_month(mes_actual, year_actual)
         invalidate_sheets_cache()  # Forzar recarga de datos actualizados
     except Exception as e:
         import traceback
