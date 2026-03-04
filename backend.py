@@ -242,13 +242,15 @@ async def health_check():
 
 
 @fastapi_app.get("/api/stats")
-async def get_statistics():
+async def get_statistics(mes: str = None):
     import pandas as pd
     try:
         df = read_sheets_df()
         if df is None or df.empty or "Estado" not in df.columns:
             return {"total": 0, "pendientes": 0, "pagadas": 0, "vencidas": 0,
                     "total_cop": 0.0, "total_usd": 0.0, "error": None}
+        if mes and "Mes" in df.columns:
+            df = df[df["Mes"].str.strip().str.lower() == mes.strip().lower()]
 
         df["Valor Total"] = pd.to_numeric(df.get("Valor Total", df.get("Total", 0)), errors="coerce").fillna(0)
         numero_factura_col = "Número Factura"
@@ -269,11 +271,13 @@ async def get_statistics():
 
 
 @fastapi_app.get("/api/invoices")
-async def get_invoices(limit: int = 50):
+async def get_invoices(limit: int = 200, mes: str = None):
     try:
         df = read_sheets_df()
         if df is None or df.empty:
             return {"invoices": [], "total": 0}
+        if mes and "Mes" in df.columns:
+            df = df[df["Mes"].str.strip().str.lower() == mes.strip().lower()]
         records = df.tail(limit).fillna("N/A").to_dict(orient="records")
         return {"invoices": records, "total": len(df)}
     except Exception as e:
@@ -419,18 +423,15 @@ async def chat_with_claude(message: dict):
         client = anthropic.Anthropic(api_key=api_key)
         
         # System prompt para que Claude entienda su rol
-        system_prompt = """Eres un asistente del Invoice Agent, sistema que procesa facturas desde Gmail usando IA.
-
-Capacidades disponibles:
-1. Procesar correos recientes: Buscar facturas en Gmail y guardarlas en Google Sheets
-2. Procesar correos por MES ESPECÍFICO: Si el usuario menciona un mes (enero, febrero, etc.) puedes buscar TODOS los correos de ese mes completo en Gmail y extraer las facturas
-3. Consultar estadísticas: Ver totales, pendientes, pagadas, vencidas
-4. Ver facturas registradas por mes
-5. Scheduler automático: activar/desactivar procesamiento periódico
-
-Cuando el usuario mencione un mes específico (ej: "procesa febrero", "busca las facturas de enero", "revisa marzo 2026"), confirma que buscarás TODOS los correos de ese mes completo en Gmail.
-
-Sé conciso y profesional. Responde siempre en español."""
+        system_prompt = """Eres un asistente del Invoice Agent. Respondes SIEMPRE en español.
+NORMAS ESTRICTAS:
+- NUNCA uses bloques de código ni texto tecnico (no uses ```, no uses python, no menciones funciones)
+- NUNCA finjas ejecutar código ni muestres resultados hipotéticos
+- Responde en máximo 2-3 oraciones cortas y directas
+- Si el usuario pide procesar un mes → solo di que lo vas a hacer y confirma el mes detectado
+- Si el usuario pide procesar correos → confirma brevemente que iniciarás el procesamiento
+- Si pregunta estadísticas o información → responde con los datos disponibles o pide que revise el dashboard
+- NO expliques cómo funciona el sistema internamente"""
 
         # Llamar a Claude
         response = client.messages.create(
@@ -469,11 +470,17 @@ Sé conciso y profesional. Responde siempre en español."""
         if year_match:
             intent_year = int(year_match.group(1))
 
-        if any(kw in lower_msg for kw in ["procesar", "correo", "email", "factura", "gmail", "buscar", "extraer", "revisar"]):
-            if intent_mes:
-                intent = "process_month"
-            else:
-                intent = "process_emails"
+        # Si se menciona un mes específico → siempre es process_month
+        if intent_mes:
+            intent = "process_month"
+        elif any(kw in lower_msg for kw in [
+            "procesar", "procesa", "correo", "email", "factura", "gmail",
+            "buscar", "busca", "extraer", "extrae", "revisar", "revisa",
+            "agarra", "agarrar", "toma", "tomar", "sube", "subir",
+            "agregar", "agrega", "añade", "añadir", "pasa", "pasar",
+            "manda", "mandar", "junta", "juntar", "trae", "traer", "sheets"
+        ]):
+            intent = "process_emails"
 
         return {
             "response": assistant_response,
