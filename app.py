@@ -948,60 +948,13 @@ def export_to_excel() -> str:
 
 # ── PROCESO PRINCIPAL ──────────────────────────────────────────────────────────
 def process_emails():
-    """Función principal del agente. Conecta, lee, extrae y guarda."""
-    if not EMAIL_USER or not EMAIL_PASS:
-        print("❌ Credenciales de correo no configuradas en .env")
-        return
-    if not ANTHROPIC_API_KEY:
-        print("❌ ANTHROPIC_API_KEY no configurada en .env")
-        return
-
-    setup_sheets()
-    processed_ids = _load_processed_ids()
-
-    print(f"📧 Conectando a Gmail ({EMAIL_USER})...")
-    try:
-        mail = connect_imap()
-    except Exception as e:
-        print(f"❌ Error de conexión IMAP: {e}")
-        return
-
-    email_ids = search_invoice_emails(mail)
-    nuevos = [eid for eid in email_ids if eid not in processed_ids]
-    print(f"🔍 {len(nuevos)} correos nuevos de {len(email_ids)} encontrados")
-
-    facturas_encontradas = 0
-
-    for eid in nuevos:
-        try:
-            _, data = mail.fetch(eid, "(RFC822)")
-            msg = email.message_from_bytes(data[0][1])
-            subject = _decode_str(msg.get("Subject", "(sin asunto)"))
-            from_   = _decode_str(msg.get("From", ""))
-
-            print(f"📨 Analizando: {subject[:60]}")
-
-            body, attachments = _get_email_content(msg)
-            invoice_data = _extract_with_ai(subject, body, attachments)
-
-            if invoice_data:
-                save_to_sheets(invoice_data, from_)
-                facturas_encontradas += 1
-
-            processed_ids.add(eid)
-            _save_processed_ids(processed_ids)
-
-
-        except Exception as e:
-            print(f"⚠️ Error procesando correo {eid}: {e}")
-            continue
-
-    try:
-        mail.logout()
-    except Exception:
-        pass
-
-    print(f"✅ Proceso completado — {facturas_encontradas} factura(s) extraída(s) de {len(nuevos)} correos")
+    """Función principal del agente. Procesa los correos del mes actual."""
+    # Delegar siempre al mes actual para no traer data de otros periodos
+    mes_actual = ["enero","febrero","marzo","abril","mayo","junio",
+                  "julio","agosto","septiembre","octubre","noviembre","diciembre"][datetime.now().month - 1]
+    year_actual = datetime.now().year
+    print(f"📅 process_emails(): delegando a mes actual → {mes_actual.capitalize()} {year_actual}")
+    process_emails_for_month(mes_actual, year_actual)
 
 
 # ── ENTRY POINT STANDALONE ─────────────────────────────────────────────────────
