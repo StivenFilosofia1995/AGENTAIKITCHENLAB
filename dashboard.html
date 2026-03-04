@@ -843,38 +843,49 @@ async function sendMessage() {
     const data = await response.json();
     removeChatLoading();
     
+    // Log de depuración para ver qué devuelve el backend
+    console.log('Respuesta del backend:', data);
+    log(`[DEBUG] Intent: ${data.intent}, Mes: ${data.mes}, Year: ${data.year}`, 'info');
+    
     if (data.error) {
       addChatMessage('assistant', `Error: ${data.error}`);
       log(`Error en chat: ${data.error}`, 'error');
     } else {
       addChatMessage('assistant', data.response);
 
-      // Procesar todos los correos (sin filtro de mes)
-      if (data.intent === 'process_emails') {
-        log('Claude detectó solicitud de procesamiento. Iniciando...', 'info');
-        setTimeout(() => triggerProcess(), 1500);
-      }
-
-      // Procesar correos de un mes específico
+      // Procesar correos de un mes específico - PRIORIDAD
       if (data.intent === 'process_month' && data.mes) {
         const mes = data.mes;
         const year = data.year || new Date().getFullYear();
-        log(`Claude detectó mes: ${mes} ${year}. Iniciando procesamiento...`, 'info');
+        log(`✅ Claude detectó mes específico: ${mes.toUpperCase()} ${year}`, 'success');
+        log(`📅 Buscando TODOS los correos de ${mes} ${year} en Gmail...`, 'info');
+        
         setTimeout(async () => {
           try {
             const r = await fetch(`${BASE}/api/process-month`, {
               method: 'POST',
               headers: {'Content-Type':'application/json'},
-              body: JSON.stringify({mes, year})
+              body: JSON.stringify({mes: mes, year: year})
             });
             const rd = await r.json();
+            log(`📬 Respuesta del servidor: ${JSON.stringify(rd)}`, 'info');
             if (rd.status === 'iniciado') {
-              log(`Procesando correos de ${mes} ${year}...`, 'success');
+              log(`🚀 Procesamiento de ${mes.toUpperCase()} ${year} iniciado correctamente`, 'success');
+              // Actualizar stats después de un tiempo razonable
+              setTimeout(() => { loadStats(); loadInvoices(); }, 8000);
             } else {
-              log(rd.message || 'No se pudo iniciar', 'warning');
+              log(rd.message || 'No se pudo iniciar el procesamiento', 'warning');
             }
-          } catch(err) { log(`Error: ${err.message}`, 'error'); }
+          } catch(err) { 
+            log(`❌ Error al procesar mes: ${err.message}`, 'error');
+            console.error('Error procesando mes:', err);
+          }
         }, 1500);
+      }
+      // Procesar todos los correos recientes (sin filtro de mes)
+      else if (data.intent === 'process_emails') {
+        log('Claude detectó solicitud de procesamiento general. Iniciando...', 'info');
+        setTimeout(() => triggerProcess(), 1500);
       }
     }
   } catch(e) {
