@@ -848,11 +848,33 @@ async function sendMessage() {
       log(`Error en chat: ${data.error}`, 'error');
     } else {
       addChatMessage('assistant', data.response);
-      
-      // Si Claude detectó intención de procesar correos, ejecutar
+
+      // Procesar todos los correos (sin filtro de mes)
       if (data.intent === 'process_emails') {
         log('Claude detectó solicitud de procesamiento. Iniciando...', 'info');
         setTimeout(() => triggerProcess(), 1500);
+      }
+
+      // Procesar correos de un mes específico
+      if (data.intent === 'process_month' && data.mes) {
+        const mes = data.mes;
+        const year = data.year || new Date().getFullYear();
+        log(`Claude detectó mes: ${mes} ${year}. Iniciando procesamiento...`, 'info');
+        setTimeout(async () => {
+          try {
+            const r = await fetch(`${BASE}/api/process-month`, {
+              method: 'POST',
+              headers: {'Content-Type':'application/json'},
+              body: JSON.stringify({mes, year})
+            });
+            const rd = await r.json();
+            if (rd.status === 'iniciado') {
+              log(`Procesando correos de ${mes} ${year}...`, 'success');
+            } else {
+              log(rd.message || 'No se pudo iniciar', 'warning');
+            }
+          } catch(err) { log(`Error: ${err.message}`, 'error'); }
+        }, 1500);
       }
     }
   } catch(e) {
@@ -880,15 +902,65 @@ document.getElementById('chat-input').addEventListener('keydown', function(e) {
   }
 });
 
-// ── WEBSOCKET ──────────────────────────────────────────────────────────────
+// ── WEBSOCKET + HTTP FALLBACK ──────────────────────────────────────────────
+let httpPollInterval = null;
+let lastLogCount = 0;
+let wsFailCount = 0;
+const WS_MAX_FAILS = 3; // tras 3 fallos, cambia a HTTP polling
+
+function setOnline(mode) {
+  const pill = document.getElementById('ws-pill');
+  const txt  = document.getElementById('ws-txt');
+  if (mode === 'ws') {
+    pill.className = 'pill on';
+    txt.textContent = 'En linea';
+  } else if (mode === 'http') {
+    pill.className = 'pill on';
+    txt.textContent = 'HTTP';
+  } else {
+    pill.className = 'pill';
+    txt.textContent = 'Offline';
+  }
+}
+
+// HTTP polling fallback: llama /api/logs cada 3 segundos
+function startHttpPolling() {
+  if (httpPollInterval) return;
+  setOnline('http');
+  httpPollInterval = setInterval(async () => {
+    try {
+      const r = await fetch(`${BASE}/api/logs`);
+      if (!r.ok) return;
+      const logs = await r.json();
+      const newLogs = logs.slice(lastLogCount);
+      newLogs.forEach(d => {
+        if (d.message) {
+          log(d.message, d.level, d.timestamp);
+          setPipe(d.message);
+          if (/completado|guardada|exitosamente/i.test(d.message)) {
+            setTimeout(() => { loadStats(); loadInvoices(); }, 2000);
+          }
+        }
+      });
+      lastLogCount = logs.length;
+      setOnline('http');
+    } catch { setOnline('offline'); }
+  }, 3000);
+}
+
+function stopHttpPolling() {
+  if (httpPollInterval) { clearInterval(httpPollInterval); httpPollInterval = null; }
+}
+
 function connectWS() {
   if (ws && ws.readyState < 2) return;
+  if (wsFailCount >= WS_MAX_FAILS) { startHttpPolling(); return; }
   try { ws = new WebSocket(`${WS}/ws/logs`); }
-  catch { schedRec(); return; }
+  catch { wsFailCount++; schedRec(); return; }
   ws.onopen = () => {
-    reconnN = 0;
-    document.getElementById('ws-pill').className = 'pill on';
-    document.getElementById('ws-txt').textContent = 'En linea';
+    reconnN = 0; wsFailCount = 0;
+    stopHttpPolling();
+    setOnline('ws');
     log('Conexion WebSocket establecida', 'success');
   };
   ws.onmessage = e => {
@@ -904,15 +976,19 @@ function connectWS() {
   };
   ws.onerror = () => {};
   ws.onclose = () => {
-    document.getElementById('ws-pill').className = 'pill';
-    document.getElementById('ws-txt').textContent = 'Offline';
-    schedRec();
+    wsFailCount++;
+    if (wsFailCount >= WS_MAX_FAILS) {
+      startHttpPolling(); // cambio permanente a HTTP
+    } else {
+      setOnline('offline');
+      schedRec();
+    }
   };
 }
 function schedRec() {
   if (reconnTmr) clearTimeout(reconnTmr);
   reconnN++;
-  reconnTmr = setTimeout(connectWS, Math.min(2000*reconnN, 12000));
+  reconnTmr = setTimeout(connectWS, Math.min(2000*reconnN, 10000));
 }
 
 // ── INIT ───────────────────────────────────────────────────────────────────
