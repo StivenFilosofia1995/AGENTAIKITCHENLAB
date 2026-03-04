@@ -1,9 +1,9 @@
 """
 Módulo agente de extracción de facturas.
 - Conexión IMAP a Gmail
-- Extracción de datos con Gemini AI
+- Extracción de datos con Claude AI (Anthropic)
 - Procesamiento de PDF, DOCX, XLSX adjuntos
-- Guardado en Excel
+- Guardado en Google Sheets
 NO contiene rutas FastAPI — eso es responsabilidad de backend.py
 """
 
@@ -21,6 +21,13 @@ import io
 import re
 from datetime import datetime
 from typing import Optional
+
+# ── MODELO ────────────────────────────────────────────────────────────────────
+# claude-sonnet-4-6: modelo ideal para extracción de facturas DIAN
+# → Mayor precisión en campos complejos (rete_iva, rete_ica, XML UBL 2.1)
+# → Mejor manejo de PDFs con tablas, imágenes y adjuntos múltiples
+# → Mismo costo que Sonnet 4.5, con mejoras en razonamiento estructurado
+CLAUDE_MODEL = "claude-sonnet-4-6"
 
 # ── CONSTANTES ────────────────────────────────────────────────────────────────
 _BASE_DIR            = os.path.dirname(os.path.abspath(__file__))
@@ -271,6 +278,7 @@ def process_emails_for_month(mes_nombre: str, year: int = None):
         year = datetime.now().year
 
     print(f"🗓️  Iniciando procesamiento del mes: {mes_nombre_cap} {year}")
+    print(f"🤖 Modelo de extracción: {CLAUDE_MODEL}")
     setup_sheets()
 
     try:
@@ -300,7 +308,7 @@ def process_emails_for_month(mes_nombre: str, year: int = None):
             print(f"🔍 Analizando: {asunto[:60]}")
             datos = _extract_with_ai(asunto, body, attachments)
             if datos:
-                # Forzar el mes al procesado si Gemini no lo detectó
+                # Forzar el mes al procesado si Claude no lo detectó
                 if not datos.get("mes") or str(datos.get("mes")).upper() in ("", "N/A"):
                     datos["mes"] = mes_nombre_cap
                 save_to_sheets(datos, from_, forced_mes=mes_nombre_cap)
@@ -411,7 +419,7 @@ def _extract_xml_text(data: bytes) -> str:
                         return e.text.strip()
             return None
 
-        # Campos DIAN UBL 2.1 —                                 también cubren CFDI MX
+        # Campos DIAN UBL 2.1 — también cubren CFDI MX
         DIAN_FIELDS = [
             ("Número Factura",       ["ID", "InvoiceID", "Folio"]),
             ("Fecha Factura",        ["IssueDate", "FechaEmision"]),
@@ -588,7 +596,7 @@ def _get_email_content(msg) -> tuple[str, list]:
     return body, attachments
 
 
-# ── INTELIGENCIA ARTIFICIAL (Claude) ─────────────────────────────────────────
+# ── INTELIGENCIA ARTIFICIAL (Claude Sonnet 4.6) ───────────────────────────────
 JSON_SCHEMA = """
 {
   "numero_factura": "(string — número/código de la factura)",
@@ -629,13 +637,20 @@ def _smart_truncate(text: str, max_chars: int) -> str:
 
 
 def _extract_with_ai(subject: str, body: str, attachments: list) -> Optional[dict]:
-    """Usa Claude (Anthropic) para extraer datos de la factura. Retorna dict o None."""
+    """
+    Usa claude-sonnet-4-6 para extraer datos de la factura.
+    Sonnet 4.6 es el modelo ideal para este caso de uso:
+    - Mayor precisión en XML DIAN UBL 2.1 vs Haiku
+    - Mejor interpretación de tablas en PDFs complejos
+    - Mayor fiabilidad en campos de retenciones colombianas
+    - Soporte completo de visión para facturas en imagen
+    Retorna dict o None.
+    """
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
         # ── Construir mensaje multimodal (texto + imágenes si las hay) ─────
-        # Separar imágenes de textos
         text_parts  = [f"ASUNTO DEL CORREO: {subject}"]
         image_parts = []  # lista de (media_type, b64, filename)
 
@@ -694,7 +709,7 @@ CONTENIDO COMPLETO:
         content.append({"type": "text", "text": prompt})
 
         resp = client.messages.create(
-            model="claude-haiku-4-5",
+            model=CLAUDE_MODEL,   # claude-sonnet-4-6
             max_tokens=2048,
             messages=[{"role": "user", "content": content}]
         )
@@ -913,7 +928,7 @@ def export_to_excel() -> str:
         # Usar spreadsheet cacheado — NO repite open_by_key
         spreadsheet = _get_spreadsheet()
         worksheets = _api_call_with_retry(spreadsheet.worksheets)
-        
+
         wb = openpyxl.Workbook()
         wb.remove(wb.active)  # Eliminar la hoja por defecto
 
@@ -923,7 +938,7 @@ def export_to_excel() -> str:
                 rows = ws_gsheet.get_all_values()
                 if not rows:  # Saltar hojas vacías
                     continue
-                
+
                 sheet = wb.create_sheet(title=ws_gsheet.title)
                 for i, row in enumerate(rows, 1):
                     sheet.append(row)
@@ -932,12 +947,12 @@ def export_to_excel() -> str:
                             cell.font = Font(bold=True, color="FFFFFF")
                             cell.fill = PatternFill("solid", fgColor="1F4E79")
                             cell.alignment = Alignment(horizontal="center")
-        
+
         # Si no hay hojas mensuales, crear una por defecto
         if not wb.worksheets:
             sheet = wb.create_sheet(title="Sin Datos")
             sheet.append(["No hay datos disponibles"])
-        
+
         wb.save(EXCEL_PATH)
         print(f"✅ Excel exportado con {len(wb.worksheets)} hojas: {EXCEL_PATH}")
         return EXCEL_PATH
@@ -949,7 +964,6 @@ def export_to_excel() -> str:
 # ── PROCESO PRINCIPAL ──────────────────────────────────────────────────────────
 def process_emails():
     """Función principal del agente. Procesa los correos del mes actual."""
-    # Delegar siempre al mes actual para no traer data de otros periodos
     mes_actual = ["enero","febrero","marzo","abril","mayo","junio",
                   "julio","agosto","septiembre","octubre","noviembre","diciembre"][datetime.now().month - 1]
     year_actual = datetime.now().year
