@@ -1,6 +1,6 @@
 """
-FastAPI Backend â€” Invoice Agent
-Servidor Ãºnico. app.py es el mÃ³dulo de procesamiento de correos.
+FastAPI Backend — Invoice Agent
+Servidor único. app.py es el módulo de procesamiento de correos.
 """
 import logging
 logging.getLogger("watchfiles").setLevel(logging.ERROR)
@@ -8,7 +8,7 @@ logging.getLogger("watchfiles").setLevel(logging.ERROR)
 from dotenv import load_dotenv
 load_dotenv()
 
-# Importar el mÃ³dulo agente (app.py â€” SIN circular import)
+# Importar el módulo agente (app.py — SIN circular import)
 import app as app_module
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -25,7 +25,12 @@ fastapi_app.add_middleware(
     allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
-# â”€â”€ LOG STORE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── MODELO CHAT ───────────────────────────────────────────────────────────────
+# claude-sonnet-4-6: mismo modelo que usa app.py para consistencia
+# Garantiza que el chat del dashboard use el mismo nivel de inteligencia
+CLAUDE_CHAT_MODEL = "claude-sonnet-4-6"
+
+# ── LOG STORE ─────────────────────────────────────────────────────────────────
 class LogStore:
     def __init__(self):
         self.logs: List[Dict] = []
@@ -51,7 +56,7 @@ class LogStore:
 log_store = LogStore()
 connected_clients: set = set()
 
-# â”€â”€ ESTADO SCHEDULER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── ESTADO SCHEDULER ──────────────────────────────────────────────────────────
 scheduler_state = {
     "enabled": False,
     "mode": "interval",
@@ -65,11 +70,11 @@ _scheduler_thread: Optional[threading.Thread] = None
 _scheduler_stop = threading.Event()
 
 
-# â”€â”€ PROCESO PRINCIPAL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── PROCESO PRINCIPAL ──────────────────────────────────────────────────────────
 def run_process_with_logs():
     """Ejecuta app.process_emails() capturando prints como logs del dashboard."""
     if scheduler_state["running"]:
-        log_store.add_log("Proceso ya en ejecuciÃ³n, espera que termine", "warning")
+        log_store.add_log("Proceso ya en ejecución, espera que termine", "warning")
         return
 
     scheduler_state["running"] = True
@@ -81,9 +86,9 @@ def run_process_with_logs():
         def write(self, msg):
             msg = msg.strip()
             if msg:
-                level = "error"   if any(x in msg for x in ["Error", "error", "ERROR", "âŒ"]) else \
-                        "success" if any(x in msg for x in ["completado", "guardada", "âœ…", "exitosamente", "Factura guardada"]) else \
-                        "warning" if any(x in msg for x in ["Warning", "warning", "âš ï¸"]) else "info"
+                level = "error"   if any(x in msg for x in ["Error", "error", "ERROR", "❌"]) else \
+                        "success" if any(x in msg for x in ["completado", "guardada", "✅", "exitosamente", "Factura guardada"]) else \
+                        "warning" if any(x in msg for x in ["Warning", "warning", "⚠️"]) else "info"
                 log_store.add_log(msg, level)
             return len(msg if msg else "")
         def flush(self):
@@ -110,6 +115,7 @@ def run_process_with_logs():
                       "julio","agosto","septiembre","octubre","noviembre","diciembre"][datetime.now().month - 1]
         year_actual = datetime.now().year
         log_store.add_log(f"Iniciando procesamiento — {mes_actual.capitalize()} {year_actual}", "info")
+        log_store.add_log(f"🤖 Modelo: {app_module.CLAUDE_MODEL}", "info")
         app_module.process_emails_for_month(mes_actual, year_actual)
         invalidate_sheets_cache()  # Forzar recarga de datos actualizados
     except Exception as e:
@@ -119,7 +125,7 @@ def run_process_with_logs():
     finally:
         sys.stdout = old_stdout
         scheduler_state["running"] = False
-        # Restaurar IDs previos + nuevos encontrados en esta ejecucion
+        # Restaurar IDs previos + nuevos encontrados en esta ejecución
         try:
             if os.path.exists(processed_path):
                 with open(processed_path) as f:
@@ -139,7 +145,7 @@ def _launch_process_thread():
     t.start()
 
 
-# â”€â”€ SCHEDULER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── SCHEDULER ──────────────────────────────────────────────────────────────────
 def _rebuild_schedule():
     schedule.clear()
     if not scheduler_state["enabled"]:
@@ -181,7 +187,7 @@ def _start_scheduler():
 _start_scheduler()
 
 
-# â”€â”€ LEER EXCEL SEGURO â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── LEER EXCEL SEGURO ──────────────────────────────────────────────────────────
 # Cache para evitar exceder cuota de Google Sheets API (error 429)
 _sheets_cache_df = None
 _sheets_cache_time = 0.0
@@ -246,11 +252,15 @@ def read_sheets_df():
         return _sheets_cache_df
 
 
-# â”€â”€ RUTAS API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── RUTAS API ──────────────────────────────────────────────────────────────────
 
 @fastapi_app.get("/api/health")
 async def health_check():
-    return {"status": "ok", "timestamp": datetime.now().isoformat()}
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "model": app_module.CLAUDE_MODEL
+    }
 
 
 @fastapi_app.get("/api/stats")
@@ -273,11 +283,11 @@ async def get_statistics(mes: str = None):
             "pagadas":    int((df["Estado"] == "PAGADA").sum()),
             "vencidas":   int((df["Estado"] == "VENCIDA").sum()),
             "total_cop":  float(df["Valor Total"].sum()),
-            "total_usd":  0.0,  # Puede agregarse lógica de conversión si es necesario
+            "total_usd":  0.0,
             "error": None,
         }
     except Exception as e:
-        log_store.add_log(f"Error estadÃ­sticas: {e}", "error")
+        log_store.add_log(f"Error estadísticas: {e}", "error")
         return {"total": 0, "pendientes": 0, "pagadas": 0, "vencidas": 0,
                 "total_cop": 0.0, "total_usd": 0.0, "error": str(e)}
 
@@ -290,7 +300,6 @@ async def get_invoices(limit: int = 1000, mes: str = None):
             return {"invoices": [], "total": 0}
         if mes and "Mes" in df.columns:
             df = df[df["Mes"].str.strip().str.lower() == mes.strip().lower()]
-        # Usar todos los registros sin cortar con tail() para no perder meses
         records = df.fillna("N/A").to_dict(orient="records")
         if limit:
             records = records[:limit]
@@ -411,13 +420,14 @@ async def clear_logs():
 @fastapi_app.get("/api/status")
 async def get_status():
     return {
-        "agente":        "activo",
+        "agente":         "activo",
         "almacenamiento": "google_sheets",
-        "sheets_id":     app_module.GOOGLE_SHEETS_ID,
-        "procesando":    scheduler_state["running"],
-        "clientes_ws":   len(connected_clients),
-        "timestamp":     datetime.now().isoformat(),
-        "logs_totales":  len(log_store.get_logs()),
+        "sheets_id":      app_module.GOOGLE_SHEETS_ID,
+        "procesando":     scheduler_state["running"],
+        "clientes_ws":    len(connected_clients),
+        "timestamp":      datetime.now().isoformat(),
+        "logs_totales":   len(log_store.get_logs()),
+        "modelo":         app_module.CLAUDE_MODEL,
     }
 
 
@@ -445,19 +455,17 @@ async def chat_with_claude(message: dict):
         user_msg = message.get("message", "").strip()
         if not user_msg:
             return {"error": "Mensaje vacío", "response": ""}
-        
-        # Obtener API key de Anthropic
+
         import anthropic
         api_key = os.getenv("ANTHROPIC_API_KEY", "")
         if not api_key:
             return {"error": "ANTHROPIC_API_KEY no configurada", "response": ""}
-        
+
         client = anthropic.Anthropic(api_key=api_key)
-        
-        # System prompt para que Claude entienda su rol
+
         system_prompt = """Eres un asistente del Invoice Agent. Respondes SIEMPRE en español.
 NORMAS ESTRICTAS:
-- NUNCA uses bloques de código ni texto tecnico (no uses ```, no uses python, no menciones funciones)
+- NUNCA uses bloques de código ni texto técnico (no uses ```, no uses python, no menciones funciones)
 - NUNCA finjas ejecutar código ni muestres resultados hipotéticos
 - Responde en máximo 2-3 oraciones cortas y directas
 - Si el usuario pide procesar un mes → solo di que lo vas a hacer y confirma el mes detectado
@@ -465,9 +473,8 @@ NORMAS ESTRICTAS:
 - Si pregunta estadísticas o información → responde con los datos disponibles o pide que revise el dashboard
 - NO expliques cómo funciona el sistema internamente"""
 
-        # Llamar a Claude
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=CLAUDE_CHAT_MODEL,   # claude-sonnet-4-6
             max_tokens=1024,
             system=system_prompt,
             messages=[{
@@ -475,9 +482,9 @@ NORMAS ESTRICTAS:
                 "content": user_msg
             }]
         )
-        
+
         assistant_response = response.content[0].text if response.content else ""
-        
+
         # Detectar intención y mes específico
         intent = None
         intent_mes = None
@@ -515,18 +522,18 @@ NORMAS ESTRICTAS:
             intent = "process_emails"
 
         return {
-            "response": assistant_response,
-            "intent": intent,
-            "mes": intent_mes,
-            "year": intent_year,
+            "response":  assistant_response,
+            "intent":    intent,
+            "mes":       intent_mes,
+            "year":      intent_year,
             "timestamp": datetime.now().isoformat()
         }
-        
+
     except Exception as e:
         return {"error": str(e), "response": f"Error al comunicar con Claude: {str(e)}"}
 
 
-# ── WEBSOCKET ──────────────────────────────────────────────────────────────
+# ── WEBSOCKET ──────────────────────────────────────────────────────────────────
 @fastapi_app.websocket("/ws/logs")
 async def websocket_logs(websocket: WebSocket):
     await websocket.accept()
@@ -539,7 +546,7 @@ async def websocket_logs(websocket: WebSocket):
 
         while True:
             await asyncio.sleep(1.5)
-            # Ping para mantener la conexiÃ³n viva
+            # Ping para mantener la conexión viva
             try:
                 await websocket.send_json({
                     "type": "ping", "message": "", "level": "ping",
@@ -564,7 +571,7 @@ async def websocket_logs(websocket: WebSocket):
         connected_clients.discard(websocket)
 
 
-# â”€â”€ DASHBOARD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── DASHBOARD ──────────────────────────────────────────────────────────────────
 if os.path.exists("static"):
     fastapi_app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -591,7 +598,7 @@ async def root():
     return "<h1>Invoice Agent</h1><a href='/dashboard.html'>Dashboard</a> | <a href='/docs'>API Docs</a>"
 
 
-# â”€â”€ ENTRY POINT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── ENTRY POINT ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
     print("  Dashboard : http://localhost:9000/dashboard.html")
