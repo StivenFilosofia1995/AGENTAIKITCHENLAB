@@ -495,7 +495,13 @@ const BASE = window.location.origin;
 const WS   = BASE.replace(/^http/, 'ws');
 let ws = null, reconnN = 0, reconnTmr = null, processing = false;
 let currentMode = 'interval';
-let activeMes = null; // mes actualmente filtrado (null = todos)
+
+// ── MES ACTUAL POR DEFECTO ───────────────────────────────────────────────────
+const MESES_ES = ['enero','febrero','marzo','abril','mayo','junio',
+                  'julio','agosto','septiembre','octubre','noviembre','diciembre'];
+const _now = new Date();
+let activeMes = MESES_ES[_now.getMonth()]; // mes actual como filtro por defecto
+const currentYear = _now.getFullYear();
 
 const MESES_CAP = {
   enero:'Enero', febrero:'Febrero', marzo:'Marzo', abril:'Abril',
@@ -506,7 +512,15 @@ const MESES_CAP = {
 function setMes(mes, btn) {
   activeMes = mes;
   document.querySelectorAll('.mes-btn').forEach(b => b.classList.remove('active'));
-  if (btn) btn.classList.add('active');
+  if (btn) {
+    btn.classList.add('active');
+  } else {
+    // Buscar el botón por texto/mes si no se pasó referencia directa
+    const label = mes ? (mes.charAt(0).toUpperCase() + mes.slice(1)) : 'Todos';
+    document.querySelectorAll('.mes-btn').forEach(b => {
+      if (b.textContent.trim() === label) b.classList.add('active');
+    });
+  }
   loadStats();
   loadInvoices();
 }
@@ -672,33 +686,45 @@ function resetPipe() { PIPE.forEach(([id]) => { const e=document.getElementById(
 // ── PROCESAR ───────────────────────────────────────────────────────────────
 async function triggerProcess() {
   if (processing) return;
+  // Siempre procesar el mes actual
+  const mes  = MESES_ES[new Date().getMonth()];
+  const year = new Date().getFullYear();
   processing = true;
   const btn = document.getElementById('btn-proc');
   const lbl = document.getElementById('btn-lbl');
   btn.disabled = true; btn.classList.add('loading');
   lbl.textContent = 'Procesando...';
   resetPipe();
-  log('Enviando solicitud al agente...','info');
+  log(`📅 Procesando correos de ${mes.toUpperCase()} ${year}...`, 'info');
   try {
-    const r = await fetch(`${BASE}/api/process`, {method:'POST'});
+    const r = await fetch(`${BASE}/api/process-month`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({mes, year})
+    });
     const d = await r.json();
     if (d.status === 'ya_ejecutando') {
       log(d.message, 'warning');
       processing = false; btn.disabled = false;
-      btn.classList.remove('loading'); lbl.textContent = 'Procesar Emails';
+      const mesLbl0 = mes.charAt(0).toUpperCase() + mes.slice(1);
+      btn.classList.remove('loading'); lbl.textContent = `Procesar ${mesLbl0}`;
       return;
     }
-    log('Agente iniciado — procesando 20 correos recientes', 'success');
-    setTimeout(() => { loadStats(); loadInvoices(); }, 12000);
+    log(`🚀 Procesamiento de ${mes.toUpperCase()} ${year} iniciado`, 'success');
+    // Asegurar que el filtro esté en el mes actual
+    if (activeMes !== mes) setMes(mes, null);
+    setTimeout(() => { loadStats(); loadInvoices(); }, 8000);
+    const mesLabel2 = mes.charAt(0).toUpperCase() + mes.slice(1);
     setTimeout(() => {
       processing = false; btn.disabled = false;
-      btn.classList.remove('loading'); lbl.textContent = 'Procesar Emails';
+      btn.classList.remove('loading'); lbl.textContent = `Procesar ${mesLabel2}`;
       loadStats(); loadInvoices();
-    }, 45000);
+    }, 60000);
   } catch(e) {
     log(`Error: ${e.message}`, 'error');
     processing = false; btn.disabled = false;
-    btn.classList.remove('loading'); lbl.textContent = 'Procesar Emails';
+    const mesLblR = mes.charAt(0).toUpperCase() + mes.slice(1);
+    btn.classList.remove('loading'); lbl.textContent = `Procesar ${mesLblR}`;
   }
 }
 
@@ -1074,10 +1100,18 @@ function schedRec() {
 
 // ── INIT ───────────────────────────────────────────────────────────────────
 async function init() {
+  // Inicial: mostrar mes actual seleccionado
+  const mesActual = MESES_ES[new Date().getMonth()];
+  if (activeMes !== mesActual) activeMes = mesActual;
   await loadMonths();
   await loadStats();
   await loadInvoices();
   await loadSchedulerState();
+  const mesLabel = mesActual.charAt(0).toUpperCase() + mesActual.slice(1);
+  // Actualizar etiqueta del botón con el mes actual
+  const btnLbl = document.getElementById('btn-lbl');
+  if (btnLbl) btnLbl.textContent = `Procesar ${mesLabel}`;
+  log(`📅 Mostrando ${mesLabel} ${new Date().getFullYear()} — mes actual`, 'info');
   connectWS();
   // Refrescar datos cada 2 minutos
   setInterval(() => { loadStats(); loadInvoices(); }, 120000);
