@@ -201,6 +201,7 @@ def read_sheets_df():
     if _sheets_cache_df is not None and (time.time() - _sheets_cache_time) < _SHEETS_CACHE_TTL:
         return _sheets_cache_df
 
+    COLS = app_module.COLUMNS  # 27 columnas oficiales
     try:
         # get_all_monthly_worksheets() usa spreadsheet.worksheets() — 1 sola llamada API
         all_worksheets = app_module.get_all_monthly_worksheets()
@@ -212,25 +213,33 @@ def read_sheets_df():
                 if not rows or len(rows) < 2:
                     continue
                 headers = rows[0]
-                data = rows[1:]
+                data    = rows[1:]
                 df = pd.DataFrame(data, columns=headers)
+                # Normalizar: asegurarse de tener exactamente las 27 columnas en orden correcto
+                for col in COLS:
+                    if col not in df.columns:
+                        df[col] = ""
+                df = df[COLS]  # reordenar y descartar columnas extra
                 df = df.replace("", pd.NA).dropna(how="all")
                 if not df.empty:
                     all_dfs.append(df)
-            except Exception:
+            except Exception as e_ws:
+                log_store.add_log(f"read_sheets_df error en hoja {ws.title}: {e_ws}", "warning")
                 continue
 
         if not all_dfs:
-            _sheets_cache_df = None
-            return None
+            _sheets_cache_df = pd.DataFrame(columns=COLS)
+            _sheets_cache_time = time.time()
+            return _sheets_cache_df
 
         consolidated_df = pd.concat(all_dfs, ignore_index=True)
         # Guardar en cache con timestamp
         _sheets_cache_df = consolidated_df
         _sheets_cache_time = time.time()
         return consolidated_df
-    except Exception:
-        # Si falla, retornar cache anterior aunque este vencido
+    except Exception as e_main:
+        log_store.add_log(f"read_sheets_df error general: {e_main}", "error")
+        # Si falla, retornar cache anterior aunque esté vencido
         return _sheets_cache_df
 
 
@@ -290,19 +299,19 @@ async def get_invoices(limit: int = 1000, mes: str = None):
 
 @fastapi_app.get("/api/months")
 async def get_months():
-    """Devuelve los meses que tienen datos en el Google Sheets."""
-    MONTH_ORDER = ["enero","febrero","marzo","abril","mayo","junio",
-                   "julio","agosto","septiembre","octubre","noviembre","diciembre"]
+    """Devuelve los 12 meses del año indicando cuáles tienen datos."""
+    ALL_MONTHS = ["enero","febrero","marzo","abril","mayo","junio",
+                  "julio","agosto","septiembre","octubre","noviembre","diciembre"]
     try:
         df = read_sheets_df()
-        if df is None or df.empty or "Mes" not in df.columns:
-            return {"months": []}
-        months = df["Mes"].str.strip().str.lower().dropna().unique().tolist()
-        months = [m for m in months if m]  # filtrar vacíos
-        months_sorted = sorted(months, key=lambda m: MONTH_ORDER.index(m) if m in MONTH_ORDER else 99)
-        return {"months": months_sorted}
+        if df is not None and not df.empty and "Mes" in df.columns:
+            with_data = set(df["Mes"].str.strip().str.lower().dropna().unique().tolist())
+        else:
+            with_data = set()
+        result = [{"mes": m, "has_data": m in with_data} for m in ALL_MONTHS]
+        return {"months": result}
     except Exception as e:
-        return {"months": [], "error": str(e)}
+        return {"months": [{"mes": m, "has_data": False} for m in ALL_MONTHS], "error": str(e)}
 
 
 @fastapi_app.get("/api/invoices/by-status/{status}")
