@@ -265,27 +265,33 @@ def process_emails_for_month(mes_nombre: str, year: int = None):
     facturas_encontradas = 0
     for eid in email_ids:
         try:
-            msg_data = fetch_email(mail, eid)
-            if not msg_data:
-                continue
-            msg = email.message_from_bytes(msg_data)
-            asunto = _decode_str(msg.get("Subject", ""))
-            texto = extract_email_text(msg)
-            if not texto.strip():
-                print(f"⏭️  Sin texto: {asunto[:50]}")
+            _, raw_data = mail.fetch(eid, "(RFC822)")
+            msg = email.message_from_bytes(raw_data[0][1])
+            asunto = _decode_str(msg.get("Subject", "(sin asunto)"))
+            from_  = _decode_str(msg.get("From", ""))
+            body, attachments = _get_email_content(msg)
+            if not body.strip() and not attachments:
+                print(f"⏭️  Sin contenido: {asunto[:50]}")
                 continue
             print(f"🔍 Analizando: {asunto[:60]}")
-            datos = extract_invoice_data(texto, asunto)
+            datos = _extract_with_ai(asunto, body, attachments)
             if datos:
-                # Forzar el mes del parámetro si el campo Mes está vacío
-                if not datos.get("mes") or datos.get("mes") == "N/A":
+                # Forzar el mes al procesado si Gemini no lo detectó
+                if not datos.get("mes") or str(datos.get("mes")).upper() in ("", "N/A"):
                     datos["mes"] = mes_nombre_cap
-                save_to_sheets(datos)
+                save_to_sheets(datos, from_)
                 facturas_encontradas += 1
                 print(f"✅ Factura guardada: {datos.get('numero_factura','?')} – {datos.get('proveedor','?')}")
         except Exception as e:
+            import traceback
             print(f"⚠️  Error procesando correo {eid}: {e}")
+            print(traceback.format_exc())
             continue
+
+    try:
+        mail.logout()
+    except Exception:
+        pass
 
     print(f"🏁 Procesamiento {mes_nombre_cap} completado: {facturas_encontradas} facturas guardadas de {len(email_ids)} correos")
 
@@ -305,12 +311,37 @@ def _decode_str(s) -> str:
 
 
 def _extract_pdf_text(data: bytes) -> str:
+    """Extrae texto de PDF. Usa pdfplumber (tablas) + PyPDF2 fallback."""
+    text = ""
+    # 1) pdfplumber — mejor para tablas y layouts complejos
     try:
-        import PyPDF2
-        reader = PyPDF2.PdfReader(io.BytesIO(data))
-        return "\n".join(p.extract_text() or "" for p in reader.pages)
-    except Exception as e:
-        return f"[Error PDF: {e}]"
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            parts = []
+            for page in pdf.pages:
+                pg_text = page.extract_text() or ""
+                # Extraer tablas como texto estructurado
+                tables = page.extract_tables() or []
+                for table in tables:
+                    for row in table:
+                        if row:
+                            line = " | ".join(str(c).strip() for c in row if c is not None and str(c).strip())
+                            if line:
+                                parts.append(line)
+                if pg_text.strip():
+                    parts.append(pg_text)
+            text = "\n".join(parts).strip()
+    except Exception:
+        pass
+    # 2) PyPDF2 como fallback
+    if not text:
+        try:
+            import PyPDF2
+            reader = PyPDF2.PdfReader(io.BytesIO(data))
+            text = "\n".join(p.extract_text() or "" for p in reader.pages)
+        except Exception as e:
+            text = f"[Error PDF: {e}]"
+    return text
 
 
 def _extract_docx_text(data: bytes) -> str:
@@ -325,16 +356,131 @@ def _extract_docx_text(data: bytes) -> str:
 def _extract_xlsx_text(data: bytes) -> str:
     try:
         import openpyxl
-        wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True)
+        wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
         lines = []
         for ws in wb.worksheets:
+            lines.append(f"=== Hoja: {ws.title} ===")
             for row in ws.iter_rows(values_only=True):
-                line = " | ".join(str(c) for c in row if c is not None)
-                if line.strip():
-                    lines.append(line)
-        return "\n".join(lines[:100])
+                row_vals = [str(c).strip() for c in row if c is not None and str(c).strip()]
+                if row_vals:
+                    lines.append(" | ".join(row_vals))
+        return "\n".join(lines[:300])
     except Exception as e:
         return f"[Error XLSX: {e}]"
+
+
+def _extract_xml_text(data: bytes) -> str:
+    """Extrae campos clave de XML DIAN UBL 2.1 + fallback genérico."""
+    try:
+        import xml.etree.ElementTree as ET
+        raw_str = data.decode("utf-8", errors="replace")
+        root = ET.fromstring(raw_str)
+
+        def _t(elem, *tags):
+            """Busca un tag en múltiples namespaces y retorna su texto."""
+            for tag in tags:
+                for ns_prefix in ("", "{urn:oasis:names:specification:ubl:schema:xsd:Invoice-2}",
+                                  "{urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2}",
+                                  "{urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2}"):
+                    e = root.find(f".//{ns_prefix}{tag}")
+                    if e is not None and e.text and e.text.strip():
+                        return e.text.strip()
+            return None
+
+        # Campos DIAN UBL 2.1 —                                 también cubren CFDI MX
+        DIAN_FIELDS = [
+            ("Número Factura",       ["ID", "InvoiceID", "Folio"]),
+            ("Fecha Factura",        ["IssueDate", "FechaEmision"]),
+            ("Proveedor NIT",        ["CompanyID", "TaxSchemeID"]),
+            ("Proveedor Nombre",     ["RegistrationName", "Name", "PartyName"]),
+            ("Subtotal",             ["LineExtensionAmount", "SubTotal"]),
+            ("IVA",                  ["TaxAmount"]),
+            ("Valor Total",          ["TaxInclusiveAmount", "PayableAmount", "Total"]),
+            ("Moneda",               ["DocumentCurrencyCode", "Moneda"]),
+            ("Tipo Factura",         ["InvoiceTypeCode"]),
+        ]
+
+        targeted = []
+        for label, tags in DIAN_FIELDS:
+            val = _t(root, *tags)
+            if val:
+                targeted.append(f"{label}: {val}")
+
+        # Fallback genérico: todos los nodos con texto + atributos relevantes
+        generic = []
+        for elem in root.iter():
+            tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+            if elem.text and elem.text.strip():
+                generic.append(f"{tag}: {elem.text.strip()}")
+            for ak, av in elem.attrib.items():
+                ak = ak.split("}")[-1] if "}" in ak else ak
+                generic.append(f"{tag}[{ak}]: {av}")
+
+        combined = "\n".join(targeted) + "\n\n--- XML completo ---\n" + "\n".join(generic[:300])
+        return combined
+    except Exception as e:
+        return f"[Error XML: {e}]"
+
+
+def _extract_zip_text(data: bytes) -> str:
+    """Extrae texto de archivos dentro de un ZIP (PDF, XLSX, XML, DOCX)."""
+    try:
+        import zipfile
+        results = []
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            for name in zf.namelist():
+                lower = name.lower()
+                try:
+                    file_data = zf.read(name)
+                except Exception:
+                    continue
+                if lower.endswith(".pdf"):
+                    results.append(f"[ZIP/{name}]\n" + _extract_pdf_text(file_data))
+                elif lower.endswith(".xlsx") or lower.endswith(".xls"):
+                    results.append(f"[ZIP/{name}]\n" + _extract_xlsx_text(file_data))
+                elif lower.endswith(".docx"):
+                    results.append(f"[ZIP/{name}]\n" + _extract_docx_text(file_data))
+                elif lower.endswith(".xml"):
+                    results.append(f"[ZIP/{name}]\n" + _extract_xml_text(file_data))
+                elif lower.endswith(".txt"):
+                    results.append(f"[ZIP/{name}]\n" + file_data.decode("utf-8", errors="replace")[:2000])
+        return "\n\n".join(results) if results else "[ZIP vacío o sin archivos reconocibles]"
+    except Exception as e:
+        return f"[Error ZIP: {e}]"
+
+
+def _extract_links_from_body(body: str) -> list:
+    """Extrae URLs de un cuerpo de correo e intenta descargar documentos enlazados."""
+    import urllib.request
+    url_pattern = re.compile(r'https?://[^\s<>"]+', re.IGNORECASE)
+    urls = url_pattern.findall(body)
+    downloaded = []
+    # Solo intentar URLs que parezcan documentos (PDF, XML, XLSX, ZIP)
+    doc_exts = (".pdf", ".xml", ".xlsx", ".xls", ".zip", ".docx")
+    seen = set()
+    for url in urls:
+        url_clean = url.rstrip(".,);'\"")
+        if any(url_clean.lower().endswith(ext) for ext in doc_exts) and url_clean not in seen:
+            seen.add(url_clean)
+            try:
+                req = urllib.request.Request(url_clean, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    raw = resp.read()
+                ext = url_clean.split("?")[0].lower()
+                if ext.endswith(".pdf"):
+                    downloaded.append(f"[URL: {url_clean}]\n" + _extract_pdf_text(raw))
+                elif ext.endswith(".xml"):
+                    downloaded.append(f"[URL: {url_clean}]\n" + _extract_xml_text(raw))
+                elif ext.endswith(".xlsx") or ext.endswith(".xls"):
+                    downloaded.append(f"[URL: {url_clean}]\n" + _extract_xlsx_text(raw))
+                elif ext.endswith(".zip"):
+                    downloaded.append(f"[URL: {url_clean}]\n" + _extract_zip_text(raw))
+                elif ext.endswith(".docx"):
+                    downloaded.append(f"[URL: {url_clean}]\n" + _extract_docx_text(raw))
+                print(f"🔗 Descargado adjunto desde URL: {url_clean}")
+            except Exception as e:
+                print(f"⚠️  No se pudo descargar {url_clean}: {e}")
+    return downloaded
 
 
 def _get_email_content(msg) -> tuple[str, list]:
@@ -346,17 +492,48 @@ def _get_email_content(msg) -> tuple[str, list]:
         ct = part.get_content_type()
         cd = str(part.get("Content-Disposition", ""))
 
-        if "attachment" in cd or ct in ("application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"):
+        if "attachment" in cd or ct in (
+            "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/zip", "application/x-zip-compressed",
+            "application/xml", "text/xml",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/pkcs7-mime",  # .p7m — XML DIAN firmado
+            "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp",
+        ):
             filename = part.get_filename() or ""
             payload = part.get_payload(decode=True)
             if not payload:
                 continue
-            if filename.lower().endswith(".pdf") or ct == "application/pdf":
-                attachments.append(_extract_pdf_text(payload))
-            elif filename.lower().endswith(".docx"):
-                attachments.append(_extract_docx_text(payload))
-            elif filename.lower().endswith(".xlsx"):
-                attachments.append(_extract_xlsx_text(payload))
+            fname_lower = filename.lower()
+            if fname_lower.endswith(".pdf") or ct == "application/pdf":
+                attachments.append(f"[PDF: {filename}]\n" + _extract_pdf_text(payload))
+                print(f"📎 PDF adjunto procesado: {filename}")
+            elif fname_lower.endswith(".docx"):
+                attachments.append(f"[DOCX: {filename}]\n" + _extract_docx_text(payload))
+                print(f"📎 DOCX adjunto procesado: {filename}")
+            elif fname_lower.endswith(".xlsx") or fname_lower.endswith(".xls"):
+                attachments.append(f"[XLSX: {filename}]\n" + _extract_xlsx_text(payload))
+                print(f"📎 XLSX adjunto procesado: {filename}")
+            elif fname_lower.endswith(".xml") or fname_lower.endswith(".p7m") or ct in ("application/xml", "text/xml", "application/pkcs7-mime"):
+                # .p7m puede ser XML firmado — intentar desenvuelto
+                xml_bytes = payload
+                if fname_lower.endswith(".p7m"):
+                    # Intentar extraer XML del wrapper PKCS#7 buscando la secuencia XML
+                    idx = payload.find(b"<?xml")
+                    if idx != -1:
+                        xml_bytes = payload[idx:]
+                attachments.append(f"[XML: {filename}]\n" + _extract_xml_text(xml_bytes))
+                print(f"📎 XML adjunto procesado: {filename}")
+            elif fname_lower.endswith(".zip") or ct in ("application/zip", "application/x-zip-compressed"):
+                attachments.append(f"[ZIP: {filename}]\n" + _extract_zip_text(payload))
+                print(f"📎 ZIP adjunto procesado: {filename}")
+            elif ct.startswith("image/") or fname_lower.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
+                # Guardar imagen en base64 para enviar a Claude Vision
+                img_b64 = base64.b64encode(payload).decode()
+                media_type = ct if ct.startswith("image/") else "image/png"
+                attachments.append(("__IMAGE__", media_type, img_b64, filename))
+                print(f"📎 Imagen adjunta registrada: {filename}")
 
         elif ct == "text/plain" and "attachment" not in cd:
             try:
@@ -365,41 +542,36 @@ def _get_email_content(msg) -> tuple[str, list]:
                 )
             except Exception:
                 pass
-        elif ct == "text/html" and not body and "attachment" not in cd:
+        elif ct == "text/html" and "attachment" not in cd:
             try:
                 from bs4 import BeautifulSoup
                 raw = part.get_payload(decode=True).decode(
                     part.get_content_charset() or "utf-8", errors="replace"
                 )
-                body += BeautifulSoup(raw, "html.parser").get_text(separator="\n")
+                html_text = BeautifulSoup(raw, "html.parser").get_text(separator="\n")
+                # Siempre agregar el HTML aunque ya haya texto plano:
+                # el HTML suele tener tablas con totales, más datos
+                if html_text.strip() and html_text.strip() not in body:
+                    body += "\n" + html_text
             except Exception:
                 pass
+
+    # Intentar descargar documentos enlazados en el cuerpo del correo
+    if body:
+        linked_docs = _extract_links_from_body(body)
+        attachments.extend(linked_docs)
 
     return body, attachments
 
 
 # ── INTELIGENCIA ARTIFICIAL (Claude) ─────────────────────────────────────────
-def _extract_with_ai(subject: str, body: str, attachments: list) -> Optional[dict]:
-    """Usa Claude (Anthropic) para extraer datos de la factura. Retorna dict o None."""
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
-        content_parts = [f"Asunto: {subject}", f"Cuerpo:\n{body[:4000]}"]
-        for i, att in enumerate(attachments, 1):
-            content_parts.append(f"Adjunto {i}:\n{att[:4000]}")
-        full_content = "\n\n".join(content_parts)
-
-        prompt = f"""Analiza el siguiente correo y extrae los datos de factura si los hay.
-Si NO es una factura, responde exactamente: NO_ES_FACTURA
-
-Si SÍ es una factura, responde SOLO en formato JSON con TODOS estos campos (usa "N/A" o 0 si no encuentras el dato):
-{{
-  "numero_factura": "...",
-  "proveedor": "...",
+JSON_SCHEMA = """
+{
+  "numero_factura": "(string — número/código de la factura)",
+  "proveedor": "(string — razón social del emisor/vendedor)",
   "fecha_factura": "DD/MM/YYYY",
-  "id_tipo": "NIT/CC/CE",
-  "numero_id": "...",
+  "id_tipo": "NIT | CC | CE | RUT | PASAPORTE",
+  "numero_id": "(NIT o cédula del proveedor, sin dígito verificador separado)",
   "subtotal": 0.0,
   "descuento": 0.0,
   "iva": 0.0,
@@ -413,22 +585,94 @@ Si SÍ es una factura, responde SOLO en formato JSON con TODOS estos campos (usa
   "utilidad": 0.0,
   "imprevistos": 0.0,
   "valor_total": 0.0,
-  "clasificacion": "Servicios/Productos/Otro",
-  "estado": "PENDIENTE/PAGADA",
+  "clasificacion": "Servicios | Productos | Mixto",
+  "estado": "PENDIENTE | PAGADA | VENCIDA",
   "valor_pagado": 0.0,
   "valor_por_pagar": 0.0,
   "fecha_pago": "DD/MM/YYYY o N/A",
-  "cliente": "...",
-  "observaciones": "..."
-}}
+  "cliente": "(string — razón social del receptor/comprador)",
+  "cotizacion": "(número de cotización si aparece, si no N/A)",
+  "observaciones": "(notas relevantes, descripción del servicio/producto)"
+}"""
 
-CORREO:
-{full_content}
+
+def _smart_truncate(text: str, max_chars: int) -> str:
+    """Toma el inicio y el final del texto para no perder datos clave al final del doc."""
+    if len(text) <= max_chars:
+        return text
+    half = max_chars // 2
+    return text[:half] + "\n...[CONTENIDO OMITIDO]...\n" + text[-half:]
+
+
+def _extract_with_ai(subject: str, body: str, attachments: list) -> Optional[dict]:
+    """Usa Claude (Anthropic) para extraer datos de la factura. Retorna dict o None."""
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+        # ── Construir mensaje multimodal (texto + imágenes si las hay) ─────
+        # Separar imágenes de textos
+        text_parts  = [f"ASUNTO DEL CORREO: {subject}"]
+        image_parts = []  # lista de (media_type, b64, filename)
+
+        body_clean = _smart_truncate(body.strip(), 8000)
+        if body_clean:
+            text_parts.append(f"CUERPO DEL CORREO:\n{body_clean}")
+
+        for i, att in enumerate(attachments, 1):
+            if isinstance(att, tuple) and att[0] == "__IMAGE__":
+                _, media_type, b64, fname = att
+                image_parts.append((media_type, b64, fname))
+            else:
+                att_text = _smart_truncate(str(att), 7000)
+                text_parts.append(f"ADJUNTO {i}:\n{att_text}")
+
+        full_text = "\n\n".join(text_parts)
+
+        prompt = f"""Eres un experto en contabilidad colombiana y facturas electrónicas DIAN.
+Analiza TODO el contenido que se te da (cuerpo del correo, adjuntos PDF, XML DIAN, XLSX, imágenes) y extrae los datos de la factura.
+
+REGLAS ESTRICTAS:
+1. Si NO existe ninguna factura en el contenido, responde EXACTAMENTE: NO_ES_FACTURA
+2. Si HAY factura, extrae TODOS los campos posibles aunque sean parciales.
+3. Números: usa formato decimal con punto (ej: 1234567.50). Sin puntos de miles. Si el campo no aparece usa 0.
+4. Texto: valor exacto tal como aparece. Si no aparece usa "N/A".
+5. numero_factura: busca 'No. Factura', 'Número', 'FACT-', 'FE-', 'FV', 'FES', 'Invoice No', campo ID en XML DIAN.
+6. proveedor: quien EMITE (vende). cliente: quien RECIBE (compra/paga).
+7. numero_id: NIT sin dígito verificador (ej: '900123456' no '900123456-1').
+8. iva: suma de todos los TaxAmount con TaxCode=01 o nombre 'IVA'.
+9. rete_iva: retención sobre el IVA (normalmente 15% del IVA).
+10. rete_ica: Impuesto de Industria y Comercio retenido.
+11. retencion_fuente: retención en la fuente (busca 'RteFte', 'RetFte', 'Retención fuente').
+12. valor_total: valor final a pagar después de impuestos y retenciones.
+13. estado: PAGADA si aparece 'pagado/cancelado', VENCIDA si venció sin pagar, si no PENDIENTE.
+14. clasificacion: Servicios/Productos/Mixto según descripción de ítems de la factura.
+15. En XML DIAN UBL 2.1: LineExtensionAmount=subtotal, TaxInclusiveAmount o PayableAmount=valor_total.
+
+Respóndeme ÚNICAMENTE con el JSON, sin texto antes ni después, sin bloques ```:
+{JSON_SCHEMA}
+
+CONTENIDO COMPLETO:
+{full_text}
 """
+
+        # ── Construir content (texto + imágenes opcionales) ───────────────
+        content: list = []
+        if image_parts:
+            # Claude admite hasta 20 imágenes por mensaje
+            for media_type, b64, fname in image_parts[:5]:
+                content.append({"type": "text", "text": f"[Imagen adjunta: {fname}]"})
+                content.append({"type": "image", "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": b64
+                }})
+        content.append({"type": "text", "text": prompt})
+
         resp = client.messages.create(
             model="claude-haiku-4-5",
-            max_tokens=512,
-            messages=[{"role": "user", "content": prompt}]
+            max_tokens=2048,
+            messages=[{"role": "user", "content": content}]
         )
         text = resp.content[0].text.strip()
 
@@ -477,85 +721,125 @@ CORREO:
         return None
 
 
-def _is_duplicate_invoice(numero_factura: str) -> bool:
-    """Comprueba si la factura ya existe en Google Sheets."""
-    if not numero_factura or numero_factura == "N/A":
-        return False
+def _is_duplicate_invoice(numero_factura: str, mes_nombre: str = None) -> tuple:
+    """Busca la factura en TODAS las hojas mensuales.
+    Retorna (encontrado: bool, fila_num: int, worksheet_object).
+    Si numero_factura es N/A/vacío devuelve (False, -1, None)."""
+    if not numero_factura or str(numero_factura).strip() in ("", "N/A"):
+        return False, -1, None
+    num_clean = str(numero_factura).strip()
+    hojas_revisadas = set()
     try:
-        ws = get_sheet()
-        col_values = ws.col_values(1)  # columna "N° Factura"
-        for val in col_values[1:]:     # saltar encabezado
-            if str(val).strip() == str(numero_factura).strip():
-                return True
-        return False
+        # 1) Revisar todas las hojas existentes
+        all_ws = get_all_monthly_worksheets()
+        for ws in all_ws:
+            hojas_revisadas.add(ws.title)
+            try:
+                col_values = _api_call_with_retry(ws.col_values, 3)  # col 3 = "Número Factura"
+                for i, val in enumerate(col_values[1:], start=2):    # fila 1=cabecera, fila 2=primer dato
+                    if str(val).strip() == num_clean:
+                        return True, i, ws
+            except Exception:
+                continue
+        # 2) Si se especificó un mes y su hoja no estaba en get_all_monthly_worksheets, revisarla igual
+        if mes_nombre and mes_nombre not in hojas_revisadas:
+            try:
+                ws = get_sheet(mes_nombre)
+                col_values = _api_call_with_retry(ws.col_values, 3)
+                for i, val in enumerate(col_values[1:], start=2):
+                    if str(val).strip() == num_clean:
+                        return True, i, ws
+            except Exception:
+                pass
+        return False, -1, None
     except Exception:
-        return False
+        return False, -1, None
+
+
+def _build_invoice_row(invoice_data: dict, mes_nombre: str) -> list:
+    """Construye la lista de valores en el mismo orden que COLUMNS."""
+    valor_total  = float(invoice_data.get("valor_total")  or 0)
+    valor_pagado = float(invoice_data.get("valor_pagado") or 0)
+    return [
+        mes_nombre,
+        str(invoice_data.get("fecha_factura") or "N/A"),
+        str(invoice_data.get("numero_factura") or "N/A"),
+        str(invoice_data.get("proveedor")      or "N/A"),
+        str(invoice_data.get("id_tipo")        or "N/A"),
+        str(invoice_data.get("numero_id")      or "N/A"),
+        float(invoice_data.get("subtotal")          or 0),
+        float(invoice_data.get("descuento")         or 0),
+        float(invoice_data.get("iva")               or 0),
+        float(invoice_data.get("rete_iva")          or 0),
+        float(invoice_data.get("rete_ica")          or 0),
+        float(invoice_data.get("impto_consumo")     or 0),
+        float(invoice_data.get("propina")           or 0),
+        float(invoice_data.get("otros_impuestos")   or 0),
+        float(invoice_data.get("retencion_fuente")  or 0),
+        float(invoice_data.get("administracion")    or 0),
+        float(invoice_data.get("utilidad")          or 0),
+        float(invoice_data.get("imprevistos")       or 0),
+        valor_total,
+        str(invoice_data.get("clasificacion") or "N/A"),
+        str(invoice_data.get("estado")        or "PENDIENTE"),
+        valor_pagado,
+        valor_total - valor_pagado,
+        str(invoice_data.get("fecha_pago")    or "N/A"),
+        str(invoice_data.get("cliente")       or "N/A"),
+        str(invoice_data.get("cotizacion")    or "N/A"),
+        str(invoice_data.get("observaciones") or ""),
+    ]
 
 
 # ── GUARDAR EN GOOGLE SHEETS ──────────────────────────────────────────────────
 def save_to_sheets(invoice_data: dict, email_from: str):
-    """Agrega una fila a Google Sheets con los datos de la factura en la hoja del mes correspondiente."""
+    """INSERT si la factura no existe, UPDATE si ya existe con datos incompletos."""
     try:
         numero    = str(invoice_data.get("numero_factura") or "N/A")
-        proveedor = str(invoice_data.get("proveedor") or "N/A")
+        proveedor = str(invoice_data.get("proveedor")      or "N/A")
 
-        if _is_duplicate_invoice(numero):
-            print(f"⏭️ Factura duplicada omitida: {numero} — {proveedor}")
-            return
-
-        # Determinar el mes de la factura
+        # ── 1. Determinar el mes ANTES de cualquier otra cosa ──────────────
         fecha_factura_str = str(invoice_data.get("fecha_factura") or "N/A")
-        meses = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
-                 "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
-        
-        # Intentar extraer el mes de la fecha de factura (formato DD/MM/YYYY)
+        meses_list = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+                      "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
         try:
             if "/" in fecha_factura_str:
-                mes_num = int(fecha_factura_str.split("/")[1])
-                mes_nombre = meses[mes_num - 1] if 1 <= mes_num <= 12 else meses[datetime.now().month - 1]
+                mes_num  = int(fecha_factura_str.split("/")[1])
+                mes_nombre = meses_list[mes_num - 1] if 1 <= mes_num <= 12 else meses_list[datetime.now().month - 1]
             else:
-                mes_nombre = meses[datetime.now().month - 1]
-        except:
-            mes_nombre = meses[datetime.now().month - 1]
+                mes_nombre = meses_list[datetime.now().month - 1]
+        except Exception:
+            mes_nombre = meses_list[datetime.now().month - 1]
 
-        # Calcular valor por pagar
-        valor_total = float(invoice_data.get("valor_total") or 0)
-        valor_pagado = float(invoice_data.get("valor_pagado") or 0)
-        valor_por_pagar = valor_total - valor_pagado
+        # ── 2. Buscar duplicado en TODAS las hojas ─────────────────────────
+        found, dup_row, dup_ws = _is_duplicate_invoice(numero, mes_nombre)
 
-        row = [
-            mes_nombre,
-            fecha_factura_str,
-            numero,
-            proveedor,
-            str(invoice_data.get("id_tipo") or "N/A"),
-            str(invoice_data.get("numero_id") or "N/A"),
-            float(invoice_data.get("subtotal") or 0),
-            float(invoice_data.get("descuento") or 0),
-            float(invoice_data.get("iva") or 0),
-            float(invoice_data.get("rete_iva") or 0),
-            float(invoice_data.get("rete_ica") or 0),
-            float(invoice_data.get("impto_consumo") or 0),
-            float(invoice_data.get("propina") or 0),
-            float(invoice_data.get("otros_impuestos") or 0),
-            float(invoice_data.get("retencion_fuente") or 0),
-            float(invoice_data.get("administracion") or 0),
-            float(invoice_data.get("utilidad") or 0),
-            float(invoice_data.get("imprevistos") or 0),
-            valor_total,
-            str(invoice_data.get("clasificacion") or "N/A"),
-            str(invoice_data.get("estado") or "PENDIENTE"),
-            valor_pagado,
-            valor_por_pagar,
-            str(invoice_data.get("fecha_pago") or "N/A"),
-            str(invoice_data.get("cliente") or "N/A"),
-            str(invoice_data.get("cotizacion") or "N/A"),
-            str(invoice_data.get("observaciones") or ""),
-        ]
-        
-        ws = get_sheet(mes_nombre)
-        ws.append_row(row, value_input_option="USER_ENTERED")
+        if found and dup_ws is not None:
+            # UPDATE: si el dato nuevo tiene valor_total > 0 y el existente es 0/vacío, actualizar
+            try:
+                existing_row_vals = _api_call_with_retry(dup_ws.row_values, dup_row)
+                # col 19 = Valor Total (índice 18 en la lista), col 4 = Proveedor (índice 3)
+                existing_total = float(existing_row_vals[18]) if len(existing_row_vals) > 18 and existing_row_vals[18] not in ("", "0", "N/A") else 0
+                new_total      = float(invoice_data.get("valor_total") or 0)
+
+                if new_total > 0 and existing_total == 0:
+                    new_row = _build_invoice_row(invoice_data, mes_nombre)
+                    # Actualizar cada celda de la fila (A=1 … AA=27)
+                    for col_idx, val in enumerate(new_row, start=1):
+                        _api_call_with_retry(dup_ws.update_cell, dup_row, col_idx, val)
+                    print(f"🔄 Factura ACTUALIZADA (datos completos): {numero} — {proveedor}")
+                else:
+                    print(f"⏭️  Factura ya existe y está completa, omitida: {numero} — {proveedor}")
+            except Exception as e_upd:
+                print(f"⚠️  No se pudo actualizar fila duplicada {numero}: {e_upd}")
+            return
+
+        # ── 3. INSERT ──────────────────────────────────────────────────────
+        row = _build_invoice_row(invoice_data, mes_nombre)
+        ws  = get_sheet(mes_nombre)
+        _api_call_with_retry(ws.append_row, row, value_input_option="USER_ENTERED")
         print(f"✅ Factura guardada en hoja '{mes_nombre}': {numero} — {proveedor}")
+
     except Exception as e:
         print(f"❌ Error guardando en Sheets: {e}")
         import traceback
