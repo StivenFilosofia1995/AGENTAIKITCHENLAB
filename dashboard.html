@@ -916,10 +916,6 @@ async function sendMessage() {
     const data = await response.json();
     removeChatLoading();
     
-    // Log de depuración para ver qué devuelve el backend
-    console.log('Respuesta del backend:', data);
-    log(`[DEBUG] Intent: ${data.intent}, Mes: ${data.mes}, Year: ${data.year}`, 'info');
-    
     if (data.error) {
       addChatMessage('assistant', `Error: ${data.error}`);
       log(`Error en chat: ${data.error}`, 'error');
