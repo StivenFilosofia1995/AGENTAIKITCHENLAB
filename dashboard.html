@@ -143,6 +143,8 @@ header{
 .mes-btn{padding:5px 12px;font-size:10px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;border:1px solid var(--border);border-radius:100px;background:transparent;color:var(--dim2);font-family:var(--font);cursor:pointer;transition:all .2s;}
 .mes-btn:hover{color:var(--text);border-color:var(--dim2);}
 .mes-btn.active{border-color:var(--accent);color:var(--accent);background:rgba(0,212,255,.08);box-shadow:0 0 10px rgba(0,212,255,.15);}
+.mes-btn.empty{opacity:.35;cursor:default;}
+.mes-btn.empty:hover{color:var(--dim2);border-color:var(--border);}
 
 /* ── TABLA FULL COLS ── */
 .tw{overflow-x:auto;}
@@ -516,13 +518,17 @@ async function loadMonths() {
     const d = await r.json();
     const bar = document.getElementById('mes-bar');
     if (!bar || !d.months || !d.months.length) return;
-    // Capitalizar nombre del mes
     const cap = m => m.charAt(0).toUpperCase() + m.slice(1);
-    // Construir botones: Todos + un botón por mes
-    bar.innerHTML = `<button class="mes-btn ${activeMes===null?'active':''}" onclick="setMes(null,this)">Todos</button>`
-      + d.months.map(m =>
-          `<button class="mes-btn ${activeMes===m?'active':''}" onclick="setMes('${m}',this)">${cap(m)}</button>`
-        ).join('');
+    // Siempre mostrar los 12 meses; los sin datos aparecen atenuados
+    bar.innerHTML =
+      `<button class="mes-btn ${activeMes===null?'active':''}" onclick="setMes(null,this)">Todos</button>` +
+      d.months.map(({mes, has_data}) => {
+        const emptyClass = has_data ? '' : ' empty';
+        const click = has_data ? `onclick="setMes('${mes}',this)"` : '';
+        const title = has_data ? '' : `title="Sin datos aún"`;
+        const activeClass = activeMes === mes ? ' active' : '';
+        return `<button class="mes-btn${emptyClass}${activeClass}" ${click} ${title}>${cap(mes)}</button>`;
+      }).join('');
   } catch(e) { console.warn('loadMonths:', e); }
 }
 
@@ -582,8 +588,9 @@ function renderTable(rows) {
   const theadRow = document.getElementById('thead-row');
 
   if (!rows.length) {
-    theadRow.innerHTML = '<th>Sin datos</th>';
-    tb.innerHTML = `<tr><td colspan="1"><div class="empty"><div class="ei">⬡</div>
+    const colCount = 27;
+    theadRow.innerHTML = '<th colspan="' + colCount + '">Sin datos</th>';
+    tb.innerHTML = `<tr><td colspan="${colCount}"><div class="empty"><div class="ei">⬡</div>
       Sin facturas registradas. Ejecuta "Procesar Emails" para comenzar.</div></td></tr>`;
     return;
   }
