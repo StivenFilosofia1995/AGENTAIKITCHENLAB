@@ -449,6 +449,15 @@ def process_emails_for_month(mes_nombre: str, year: int = None):
                 continue
 
             print(f"[{idx}/{total}] 🔍 {asunto[:60]}")
+
+            # ── PRE-FILTRO LOCAL: evita gastar tokens en no-facturas ─────────
+            body_preview = body[:300] if body else ""
+            if _should_skip_email(asunto, body_preview):
+                print(f"[{idx}/{total}] ⏭️  Omitido por pre-filtro: {asunto[:60]}")
+                omitidos += 1
+                continue
+            # ─────────────────────────────────────────────────────────────────
+
             datos = _extract_with_ai(asunto, body, attachments)
             if datos:
                 if not datos.get("mes") or str(datos.get("mes")).upper() in ("", "N/A"):
@@ -771,16 +780,120 @@ def _smart_truncate(text: str, max_chars: int) -> str:
     return text[:half] + "\n...[CONTENIDO OMITIDO]...\n" + text[-half:]
 
 
+
+# ── PRE-FILTRO LOCAL (sin tokens de IA) ──────────────────────────────────────
+_SKIP_SUBJECTS = [
+    # Certificados y solicitudes administrativas
+    "certificado de retenci",
+    "certificado tributar",
+    "certificado de ingreso",
+    "solicitud de certificado",
+    "solicitud de informaci",
+    "solicitud de cotizaci",
+    "declaraci",
+    "informe de gestion",
+    # Cuentas de cobro y honorarios (excluidas explícitamente)
+    "cuenta de cobro",
+    "cobro de honorarios",
+    "honorarios profesionales",
+    # Links / notificaciones de pago (NO la factura en sí)
+    "link de pago",
+    "enlace de pago",
+    "boton de pago",
+    "botón de pago",
+    "notificaci",               # notificación PSE / Nequi / Bancolombia
+    "pago exitoso",
+    "pago recibido",
+    "transacci",
+    "extracto",
+    # Seguridad / auth
+    "cambio de clave",
+    "cambio de contrase",
+    "restablecimiento",
+    "recupera tu",
+    "verificaci",
+    "confirma tu correo",
+    "activa tu cuenta",
+    "inicio de sesi",
+    "two-factor",
+    "autenticaci",
+    # Marketing y boletines
+    "boletin",
+    "boletín",
+    "newsletter",
+    "oferta especial",
+    "promocion",
+    "promoción",
+    "unsubscribe",
+    "darse de baja",
+    # Soporte y encuestas
+    "ticket #",
+    "caso #",
+    "soporte técnico",
+    "soporte tecnico",
+    "mesa de ayuda",
+    "encuesta",
+    "califica tu experiencia",
+    "satisfacci",
+]
+
+# Palabras que SÍ indican factura electrónica DIAN (whitelist — anulan el skip)
+_INVOICE_KEYWORDS = [
+    "factura electronica",
+    "factura electrónica",
+    "factura de venta",
+    "fact-", "fact.", "fe-", "fv-", "fes-",
+    "cufe", "cude",
+    "nota crédito", "nota credito",
+    "nota débito",  "nota debito",
+    "invoice",
+]
+
+def _should_skip_email(subject: str, body_preview: str = "") -> bool:
+    """Pre-filtro LOCAL: descarta correos que definitivamente no son facturas
+    sin gastar ningún token de IA.
+
+    Reglas (en orden de prioridad):
+    1. Si el asunto contiene una palabra de factura DIAN → procesar siempre.
+    2. Si el asunto contiene una palabra de la blacklist → omitir.
+    3. Sin indicadores claros → dejar pasar (Claude decide).
+    """
+    subj_low = subject.lower().strip()
+
+    # 1. Whitelist: factura DIAN confirmada → nunca saltar
+    for kw in _INVOICE_KEYWORDS:
+        if kw in subj_low:
+            return False
+
+    # 2. Blacklist: documentos que el usuario quiere excluir
+    for kw in _SKIP_SUBJECTS:
+        if kw in subj_low:
+            return True
+
+    return False
+
+
 def _extract_with_ai(subject: str, body: str, attachments: list) -> Optional[dict]:
-    """Usa claude-sonnet-4-6 para extraer datos de la factura. Retorna dict o None."""
-    try:
-        import anthropic
+    """Usa claude-sonnet-4-6 para extraer datos de la factura. Retorna dict o None.
+
+    Rate limiting: espera 3 s entre llamadas (≈20 req/min) y reintenta 3 veces
+    con backoff exponencial si llega un 429 de Anthropic.
+    """
+    import anthropic, time as _time
+
+    # Throttle base: garantiza ≈ 3 s entre llamadas a la API
+    _time.sleep(3)
+
+    for attempt in range(3):   # hasta 3 intentos por correo
+      try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
         text_parts  = [f"ASUNTO DEL CORREO: {subject}"]
         image_parts = []
 
-        body_clean = _smart_truncate(body.strip(), 12000)
+        # Reducir cuerpo de 12000 a 6000 chars: la mayoría de XMLs DIAN
+        # tienen los datos clave en los primeros 5-6 kB.
+        body_clean = _smart_truncate(body.strip(), 6000)
         if body_clean:
             text_parts.append(f"CUERPO DEL CORREO:\n{body_clean}")
 
@@ -789,60 +902,56 @@ def _extract_with_ai(subject: str, body: str, attachments: list) -> Optional[dic
                 _, media_type, b64, fname = att
                 image_parts.append((media_type, b64, fname))
             else:
-                att_text = _smart_truncate(str(att), 10000)
+                # Adjuntos de texto: reducir a 6000 chars también
+                att_text = _smart_truncate(str(att), 6000)
                 text_parts.append(f"ADJUNTO {i}:\n{att_text}")
 
         full_text = "\n\n".join(text_parts)
 
         prompt = f"""Eres un experto en contabilidad colombiana y facturas electrónicas DIAN.
-Analiza TODO el contenido que se te da (cuerpo del correo, adjuntos PDF, XML DIAN, XLSX, imágenes).
+Analiza el contenido que se te da (cuerpo del correo, adjuntos PDF, XML DIAN, XLSX, imágenes).
 
 ═══════════════════════════════════════════════════════
-DOCUMENTOS QUE DEBES RECHAZAR — responde NO_ES_FACTURA
+RESPONDE NO_ES_FACTURA — sin excepción — si el documento es:
 ═══════════════════════════════════════════════════════
-Rechaza INMEDIATAMENTE si el documento es alguno de estos tipos (aunque mencione valores o montos):
-- Solicitud de certificado (certificado de retención, certificado tributario, etc.)
-- Solicitud de información (pedidos de datos, formularios, consultas)
-- Link / botón de pago (notificaciones PSE, Wompi, PayU, Nequi, Bancolombia, etc.)
-- Cambio de contraseña / clave (correos de seguridad, reset, verificación 2FA)
-- Cotizaciones sin número de factura DIAN oficial
-- Recibos de caja o documentos equivalentes sin CUFE
-- Extractos bancarios
-- Publicidad o boletines comerciales
-- Correos de soporte o servicio al cliente sin factura adjunta
+- Solicitud de certificado (retención, tributario, ingresos, etc.)
+- Solicitud de información o formulario
+- Cuenta de cobro o cobro de honorarios
+- Link / botón de pago (PSE, Wompi, PayU, Nequi, Bancolombia, etc.)
+- Cambio de contraseña / clave / verificación 2FA
+- Cotización sin número de factura DIAN oficial
+- Extracto bancario
+- Publicidad, boletín o correo de soporte sin factura adjunta
 
 ═══════════════════════════════════════════════════════
-DOCUMENTOS QUE SÍ DEBES PROCESAR
+PROCESA ÚNICAMENTE:
 ═══════════════════════════════════════════════════════
-Procesa cualquiera de estos documentos:
-1. FACTURA ELECTRÓNICA DIAN (XML UBL 2.1, PDF, imagen, XLSX) — Estado PENDIENTE o PAGADA
-2. CUENTA DE COBRO — documento de cobro de honorarios o servicios sin CUFE.
-   Para cuentas de cobro: usa clasificacion="Cuenta de Cobro", numero_factura=número del documento
-   o genera uno como CC-[proveedor abreviado]-[mes] si no tiene número, estado=PENDIENTE o PAGADA.
+FACTURA ELECTRÓNICA DIAN (XML UBL 2.1, PDF, imagen, XLSX)
+con CUFE o número de factura oficial (FE-, FV-, FES-, FACT-, etc.).
 
 ═══════════════════════════════════════════════════════
-REGLAS DE EXTRACCIÓN (solo si es factura válida)
+REGLAS DE EXTRACCIÓN (solo si es factura DIAN válida)
 ═══════════════════════════════════════════════════════
-1. Si NO es factura válida según criterios anteriores → responde EXACTAMENTE: NO_ES_FACTURA
-2. Si SÍ es factura válida → extrae TODOS los campos posibles aunque sean parciales.
-3. Números: formato decimal con punto (ej: 1234567.50). Sin puntos de miles. Si no aparece → 0.
+1. Si NO es factura DIAN válida → responde EXACTAMENTE: NO_ES_FACTURA
+2. Si SÍ es factura DIAN → extrae TODOS los campos posibles aunque sean parciales.
+3. Números: decimal con punto (ej: 1234567.50). Sin puntos de miles. Si no aparece → 0.
 4. Texto: valor exacto tal como aparece. Si no aparece → "N/A".
-5. numero_factura: busca 'No. Factura', 'Número', 'FACT-', 'FE-', 'FV', 'FES', 'Invoice No', CUFE/UUID en XML DIAN.
+5. numero_factura: 'No. Factura', 'Número', 'FACT-', 'FE-', 'FV', 'FES', o UUID/CUFE en XML.
 6. proveedor: quien EMITE (vende). cliente: quien RECIBE (compra/paga).
 7. numero_id: NIT sin dígito verificador (ej: '900123456' no '900123456-1').
-8. iva: suma de todos los TaxAmount con TaxCode=01 o nombre 'IVA'.
-9. rete_iva: retención sobre el IVA (normalmente 15% del IVA).
+8. iva: suma de TaxAmount con TaxCode=01 o nombre 'IVA'.
+9. rete_iva: retención sobre IVA (normalmente 15% del IVA).
 10. rete_ica: Impuesto de Industria y Comercio retenido.
-11. retencion_fuente: retención en la fuente (busca 'RteFte', 'RetFte', 'Retención fuente').
-12. valor_total: valor final a pagar después de impuestos y retenciones.
-13. estado: PAGADA si aparece 'pagado/cancelado/recibido', VENCIDA si venció sin pagar, si no → PENDIENTE.
-14. clasificacion: Servicios/Productos/Mixto según descripción de ítems.
-15. En XML DIAN UBL 2.1: LineExtensionAmount=subtotal, TaxInclusiveAmount o PayableAmount=valor_total.
+11. retencion_fuente: busca 'RteFte', 'RetFte', 'Retención fuente'.
+12. valor_total: valor final a pagar tras impuestos y retenciones.
+13. estado: PAGADA si aparece 'pagado/cancelado/recibido', VENCIDA si venció sin pagar → sino PENDIENTE.
+14. clasificacion: Servicios/Productos/Mixto según ítems.
+15. En XML DIAN UBL 2.1: LineExtensionAmount=subtotal, PayableAmount=valor_total.
 
 Respóndeme ÚNICAMENTE con el JSON o con NO_ES_FACTURA. Sin texto antes ni después, sin bloques ```:
 {JSON_SCHEMA}
 
-CONTENIDO COMPLETO:
+CONTENIDO:
 {full_text}
 """
 
@@ -900,9 +1009,19 @@ CONTENIDO COMPLETO:
         print(f"⚠️ Claude no devolvió JSON válido. Respuesta: {text[:200]}")
         return None
 
-    except Exception as e:
+      except Exception as e:
+        err_str = str(e)
+        if "429" in err_str or "rate_limit" in err_str:
+            # Backoff exponencial: 60 s, 120 s, 180 s
+            wait = 60 * (attempt + 1)
+            print(f"⏳ Rate limit Anthropic (intento {attempt+1}/3). Esperando {wait}s...")
+            _time.sleep(wait)
+            continue   # reintentar
         print(f"⚠️ Error IA: {e}")
         return None
+
+    print(f"⚠️ Error IA: Se agotaron los reintentos por rate limit en '{subject[:50]}'")
+    return None
 
 
 def _is_duplicate_invoice(numero_factura: str, mes_nombre: str = None,
@@ -1086,6 +1205,82 @@ def save_to_sheets(invoice_data: dict, email_from: str, forced_mes: str = None):
         import traceback
         print(traceback.format_exc())
         return False
+
+
+def update_invoice_status(numero_factura: str, nuevo_estado: str,
+                          valor_pagado: float = None, fecha_pago: str = None,
+                          observaciones: str = None) -> dict:
+    """Actualiza Estado, Valor Pagado, Valor Por Pagar, Fecha Pago y Observaciones
+    de una factura existente en Google Sheets.
+
+    Busca la factura en todas las hojas mensuales por número de factura.
+    Retorna {"ok": True, "mes": "Febrero", "fila": 5} o {"ok": False, "error": "..."}.
+
+    Índices de columna (1-based, según COLUMNS):
+      19 → Valor Total        21 → Estado
+      22 → Valor Pagado       23 → Valor Por Pagar
+      24 → Fecha Pago         27 → Observaciones
+    """
+    num_clean = str(numero_factura).strip()
+    if not num_clean or num_clean == "N/A":
+        return {"ok": False, "error": "Número de factura inválido"}
+
+    nuevo_estado = nuevo_estado.strip().upper()
+    if nuevo_estado not in ("PENDIENTE", "PAGADA", "VENCIDA"):
+        return {"ok": False, "error": f"Estado inválido: {nuevo_estado}"}
+
+    try:
+        found, row_num, ws = _is_duplicate_invoice(num_clean)
+        if not found or ws is None:
+            return {"ok": False, "error": f"Factura '{num_clean}' no encontrada"}
+
+        # Leer fila actual para calcular Valor Por Pagar
+        row_vals = _api_call_with_retry(ws.row_values, row_num)
+        valor_total = _safe_float(row_vals[18]) if len(row_vals) > 18 else 0.0  # col 19
+
+        # Calcular valor_pagado si no se proporcionó
+        if valor_pagado is None:
+            if nuevo_estado == "PAGADA":
+                valor_pagado = valor_total
+            else:
+                valor_pagado = _safe_float(row_vals[21]) if len(row_vals) > 21 else 0.0  # col 22
+
+        valor_por_pagar = max(0.0, valor_total - valor_pagado)
+
+        # Si marca PAGADA y no hay fecha, poner la de hoy
+        if fecha_pago is None and nuevo_estado == "PAGADA":
+            fecha_pago = datetime.now().strftime("%d/%m/%Y")
+        elif fecha_pago is None:
+            fecha_pago = row_vals[23] if len(row_vals) > 23 else "N/A"  # col 24
+
+        # Observaciones: append si hay texto nuevo, conservar si no
+        obs_actual = row_vals[26] if len(row_vals) > 26 else ""  # col 27
+        if observaciones and observaciones.strip():
+            obs_nueva = f"{obs_actual} | {observaciones.strip()}".lstrip(" |")
+        else:
+            obs_nueva = obs_actual
+
+        # Actualizar celdas
+        updates = {
+            21: nuevo_estado,
+            22: valor_pagado,
+            23: valor_por_pagar,
+            24: fecha_pago,
+            27: obs_nueva,
+        }
+        for col_idx, val in updates.items():
+            _api_call_with_retry(ws.update_cell, row_num, col_idx, val)
+
+        print(f"✅ Estado actualizado: {num_clean} → {nuevo_estado} (fila {row_num}, hoja '{ws.title}')")
+        return {"ok": True, "mes": ws.title, "fila": row_num,
+                "estado": nuevo_estado, "valor_pagado": valor_pagado,
+                "valor_por_pagar": valor_por_pagar, "fecha_pago": fecha_pago}
+
+    except Exception as e:
+        import traceback
+        print(f"❌ Error actualizando factura {num_clean}: {e}")
+        print(traceback.format_exc())
+        return {"ok": False, "error": str(e)}
 
 
 def export_to_excel() -> str:
