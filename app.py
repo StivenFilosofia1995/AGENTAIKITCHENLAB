@@ -308,6 +308,11 @@ def process_emails_for_month(mes_nombre: str, year: int = None):
             print(f"🔍 Analizando: {asunto[:60]}")
             datos = _extract_with_ai(asunto, body, attachments)
             if datos:
+                # ── [v5.2] Validación post-extracción ─────────────────────
+                valida, motivo = _validate_invoice_data(datos, asunto)
+                if not valida:
+                    print(f"🚫 Rechazado por validación: {motivo} | Asunto: {asunto[:60]}")
+                    continue
                 # Forzar el mes al procesado si Claude no lo detectó
                 if not datos.get("mes") or str(datos.get("mes")).upper() in ("", "N/A"):
                     datos["mes"] = mes_nombre_cap
@@ -785,7 +790,53 @@ CONTENIDO COMPLETO:
         return None
 
 
-def _is_duplicate_invoice(numero_factura: str, mes_nombre: str = None,
+def _validate_invoice_data(datos: dict, subject: str = "") -> tuple[bool, str]:
+    """
+    Validación post-extracción antes de guardar en Sheets.
+    Segunda línea de defensa después del prompt de Claude.
+    Retorna (es_valida, motivo_rechazo).
+    """
+    if not datos or not isinstance(datos, dict):
+        return False, "Datos vacíos o inválidos"
+
+    numero = str(datos.get("numero_factura") or "").strip()
+    proveedor = str(datos.get("proveedor") or "").strip()
+    valor_total = float(datos.get("valor_total") or 0)
+
+    # 1. Número de factura no puede ser vacío o N/A
+    if not numero or numero.upper() in ("N/A", "NA", "NONE", "", "NULL"):
+        return False, f"Número de factura inválido: '{numero}'"
+
+    # 2. Rechazar patrones de documentos no deseados en el número
+    patrones_invalidos = [
+        r"^CERT",          # Certificados
+        r"^COB",           # Cuentas de cobro
+        r"^COTIZ",         # Cotizaciones
+        r"^PSE",           # Links PSE
+        r"^WOMPI",         # Wompi
+        r"^PAGO",          # Links de pago genéricos
+        r"^SOL",           # Solicitudes
+        r"^RESET",         # Reset de clave
+    ]
+    num_upper = numero.upper()
+    for patron in patrones_invalidos:
+        if re.match(patron, num_upper):
+            return False, f"Número de factura con patrón no DIAN: '{numero}'"
+
+    # 3. El número debe tener al menos 3 caracteres útiles
+    if len(numero) < 3:
+        return False, f"Número de factura demasiado corto: '{numero}'"
+
+    # 4. Proveedor no puede ser genérico o vacío
+    if not proveedor or proveedor.upper() in ("N/A", "NA", "NONE", "", "NULL", "PROVEEDOR"):
+        return False, f"Proveedor inválido: '{proveedor}'"
+
+    # 5. Valor total debe ser positivo (facturas de $0 no tienen sentido)
+    if valor_total <= 0:
+        # Advertir pero NO rechazar — algunas facturas DIAN tienen total en 0 por descuento total
+        print(f"⚠️  Factura {numero} tiene valor_total=0. Verificar manualmente.")
+
+    return True, ""
                            proveedor: str = None, fecha: str = None) -> tuple:
     """Busca la factura en TODAS las hojas mensuales.
     Retorna (encontrado: bool, fila_num: int, worksheet_object).
