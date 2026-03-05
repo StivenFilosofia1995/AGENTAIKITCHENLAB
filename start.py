@@ -1,37 +1,57 @@
 # start.py
 import os
 from pathlib import Path
+
 import uvicorn
 
 
+def _looks_like_python_start(line: str) -> bool:
+    txt = (line or "").strip()
+    if not txt:
+        return True
+    return (
+        txt.startswith('"""')
+        or txt.startswith("'''")
+        or txt.startswith("#")
+        or txt.startswith("import ")
+        or txt.startswith("from ")
+        or txt.startswith("def ")
+        or txt.startswith("class ")
+    )
+
+
 def _sanitize_backend_file() -> bool:
-    """Elimina prefijos accidentales de comandos shell pegados en backend.py."""
+    """Limpia encabezados corruptos en backend.py antes de importar FastAPI."""
     backend_path = Path(__file__).with_name("backend.py")
     if not backend_path.exists():
         return False
 
-    lines = backend_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    raw = backend_path.read_text(encoding="utf-8", errors="replace")
+    lines = raw.splitlines()
     if not lines:
         return False
 
-    first = lines[0].strip()
-    # Caso observado en Railway: línea 1 empieza con '(cd "$(git rev-parse ...'
-    if not first.startswith("(cd "):
+    # Si el inicio ya parece Python válido, no tocar archivo
+    if _looks_like_python_start(lines[0]):
         return False
 
-    cutoff = 0
-    for idx, line in enumerate(lines, start=1):
-        txt = line.strip()
-        if txt.startswith('"""') or txt.startswith("#") or txt.startswith("import ") or txt.startswith("from "):
-            cutoff = idx - 1
+    # Buscar primera línea que parezca código Python válido
+    start_idx = None
+    for idx, line in enumerate(lines):
+        if _looks_like_python_start(line):
+            start_idx = idx
             break
 
-    if cutoff <= 0:
+    if start_idx is None:
         return False
 
-    cleaned = "\n".join(lines[cutoff:]).strip() + "\n"
+    cleaned = "\n".join(lines[start_idx:]).strip() + "\n"
+    if cleaned == raw:
+        return False
+
+    removed = start_idx
     backend_path.write_text(cleaned, encoding="utf-8")
-    print(f"⚠️ backend.py saneado automáticamente (se removieron {cutoff} líneas corruptas al inicio).")
+    print(f"⚠️ backend.py saneado automáticamente (se removieron {removed} líneas corruptas al inicio).")
     return True
 
 
@@ -44,5 +64,7 @@ if __name__ == "__main__":
 
     _sanitize_backend_file()
 
-    # backend:fastapi_app -> coincide con la variable FastAPI en backend.py
-    uvicorn.run("backend:fastapi_app", host="0.0.0.0", port=port, reload=False, log_level="info")
+    # Import explícito tras saneamiento para fallar temprano con contexto claro
+    import backend
+
+    uvicorn.run(backend.fastapi_app, host="0.0.0.0", port=port, reload=False, log_level="info")
