@@ -183,8 +183,7 @@ def connect_imap() -> imaplib.IMAP4_SSL:
 
 
 def search_invoice_emails(mail: imaplib.IMAP4_SSL) -> list:
-    """Devuelve los IDs de los 500 correos más recientes desde UN solo folder.
-    Prioriza [Gmail]/All Mail para máxima cobertura. Deja el folder activo."""
+    """Devuelve los IDs de los 500 correos más recientes desde UN solo folder."""
     folders_to_try = ['"[Gmail]/All Mail"', '[Gmail]/All Mail', 'All Mail', 'INBOX']
     for folder in folders_to_try:
         try:
@@ -227,13 +226,7 @@ _MES_EN = {
 
 
 def search_emails_by_month(mail: imaplib.IMAP4_SSL, mes_nombre: str, year: int = None) -> list:
-    """Busca TODOS los correos del mes usando IMAP SINCE/BEFORE.
-
-    IMPORTANTE: usa UN SOLO folder para evitar mezclar IDs con numeraciones
-    distintas. Prioriza [Gmail]/All Mail (cobertura completa) y cae a INBOX
-    si All Mail no está disponible. Deja el folder seleccionado activo para
-    que mail.fetch() funcione correctamente en el llamador.
-    """
+    """Busca TODOS los correos del mes usando IMAP SINCE/BEFORE."""
     mes_nombre = mes_nombre.lower().strip()
     mes_num = _MES_NUM.get(mes_nombre)
     if not mes_num:
@@ -249,10 +242,6 @@ def search_emails_by_month(mail: imaplib.IMAP4_SSL, mes_nombre: str, year: int =
     fecha_fin    = f"01-{_MES_EN[mes_siguiente]}-{year_siguiente}"
     criterio     = f'(SINCE "{fecha_inicio}" BEFORE "{fecha_fin}")'
 
-    # Orden de prioridad: All Mail primero (cubre todos los correos recibidos
-    # y enviados), luego INBOX como fallback.
-    # NUNCA combinar IDs de distintos folders — cada folder tiene su propia
-    # numeración secuencial y los IDs NO son intercambiables.
     folders_to_try = [
         '"[Gmail]/All Mail"',
         '[Gmail]/All Mail',
@@ -270,7 +259,6 @@ def search_emails_by_month(mail: imaplib.IMAP4_SSL, mes_nombre: str, year: int =
                 continue
             ids = [uid.decode() for uid in data[0].split() if uid]
             if ids:
-                # Dejar el folder activo — mail.fetch() lo necesita
                 print(f"📬 {len(ids)} correos en {mes_nombre.capitalize()} {year} [{folder}]")
                 return sorted(ids, key=lambda x: int(x) if x.isdigit() else 0)
         except Exception as ex:
@@ -293,14 +281,7 @@ def search_emails_by_month(mail: imaplib.IMAP4_SSL, mes_nombre: str, year: int =
 
 
 def process_emails_for_month(mes_nombre: str, year: int = None):
-    """Procesa TODOS los correos de un mes específico.
-
-    - Usa el folder que dejó activo search_emails_by_month (All Mail o INBOX)
-      para garantizar que los IDs coinciden con los del fetch.
-    - Lleva un set de Message-IDs procesados en esta sesión para evitar
-      duplicar facturas si el mismo correo aparece en varios folders.
-    - Reconecta automáticamente si la sesión IMAP expira.
-    """
+    """Procesa TODOS los correos de un mes específico."""
     if not EMAIL_USER or not EMAIL_PASS:
         print("❌ Credenciales de correo no configuradas en .env")
         return
@@ -335,11 +316,10 @@ def process_emails_for_month(mes_nombre: str, year: int = None):
     facturas_encontradas = 0
     omitidos = 0
     errores = 0
-    seen_msgids: set = set()  # Dedup por Message-ID dentro de la sesión
+    seen_msgids: set = set()
 
     for idx, eid in enumerate(email_ids, 1):
         try:
-            # ── Reconexión automática si la sesión IMAP expiró ────────────
             try:
                 raw_result = mail.fetch(eid, "(RFC822)")
                 status_f, raw_data = raw_result
@@ -350,7 +330,6 @@ def process_emails_for_month(mes_nombre: str, year: int = None):
                 except Exception:
                     pass
                 mail = connect_imap()
-                # Restaurar el folder correcto para continuar los fetches
                 search_emails_by_month(mail, mes_nombre, year)
                 status_f, raw_data = mail.fetch(eid, "(RFC822)")
 
@@ -359,7 +338,6 @@ def process_emails_for_month(mes_nombre: str, year: int = None):
                 omitidos += 1
                 continue
 
-            # raw_data puede ser [(b'1 (RFC822 {size}', b'...bytes...')], None]
             raw_bytes = None
             for part in raw_data:
                 if isinstance(part, tuple) and len(part) >= 2 and isinstance(part[1], bytes):
@@ -373,7 +351,6 @@ def process_emails_for_month(mes_nombre: str, year: int = None):
             asunto = _decode_str(msg.get("Subject", "(sin asunto)"))
             from_  = _decode_str(msg.get("From", ""))
 
-            # Dedup por Message-ID (evita procesar el mismo correo dos veces)
             msg_id = str(msg.get("Message-ID", "")).strip()
             if msg_id and msg_id in seen_msgids:
                 omitidos += 1
@@ -431,14 +408,12 @@ def _decode_str(s) -> str:
 def _extract_pdf_text(data: bytes) -> str:
     """Extrae texto de PDF. Usa pdfplumber (tablas) + PyPDF2 fallback."""
     text = ""
-    # 1) pdfplumber — mejor para tablas y layouts complejos
     try:
         import pdfplumber
         with pdfplumber.open(io.BytesIO(data)) as pdf:
             parts = []
             for page in pdf.pages:
                 pg_text = page.extract_text() or ""
-                # Extraer tablas como texto estructurado
                 tables = page.extract_tables() or []
                 for table in tables:
                     for row in table:
@@ -451,7 +426,6 @@ def _extract_pdf_text(data: bytes) -> str:
             text = "\n".join(parts).strip()
     except Exception:
         pass
-    # 2) PyPDF2 como fallback
     if not text:
         try:
             import PyPDF2
@@ -495,7 +469,6 @@ def _extract_xml_text(data: bytes) -> str:
         root = ET.fromstring(raw_str)
 
         def _t(elem, *tags):
-            """Busca un tag en múltiples namespaces y retorna su texto."""
             for tag in tags:
                 for ns_prefix in ("", "{urn:oasis:names:specification:ubl:schema:xsd:Invoice-2}",
                                   "{urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2}",
@@ -505,7 +478,6 @@ def _extract_xml_text(data: bytes) -> str:
                         return e.text.strip()
             return None
 
-        # Campos DIAN UBL 2.1 — también cubren CFDI MX
         DIAN_FIELDS = [
             ("Número Factura",       ["ID", "InvoiceID", "Folio"]),
             ("Fecha Factura",        ["IssueDate", "FechaEmision"]),
@@ -524,7 +496,6 @@ def _extract_xml_text(data: bytes) -> str:
             if val:
                 targeted.append(f"{label}: {val}")
 
-        # Fallback genérico: todos los nodos con texto + atributos relevantes
         generic = []
         for elem in root.iter():
             tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
@@ -541,7 +512,7 @@ def _extract_xml_text(data: bytes) -> str:
 
 
 def _extract_zip_text(data: bytes) -> str:
-    """Extrae texto de archivos dentro de un ZIP (PDF, XLSX, XML, DOCX)."""
+    """Extrae texto de archivos dentro de un ZIP."""
     try:
         import zipfile
         results = []
@@ -573,7 +544,6 @@ def _extract_links_from_body(body: str) -> list:
     url_pattern = re.compile(r'https?://[^\s<>"]+', re.IGNORECASE)
     urls = url_pattern.findall(body)
     downloaded = []
-    # Solo intentar URLs que parezcan documentos (PDF, XML, XLSX, ZIP)
     doc_exts = (".pdf", ".xml", ".xlsx", ".xls", ".zip", ".docx")
     seen = set()
     for url in urls:
@@ -616,7 +586,7 @@ def _get_email_content(msg) -> tuple[str, list]:
             "application/zip", "application/x-zip-compressed",
             "application/xml", "text/xml",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "application/pkcs7-mime",  # .p7m — XML DIAN firmado
+            "application/pkcs7-mime",
             "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp",
         ):
             filename = part.get_filename() or ""
@@ -634,10 +604,8 @@ def _get_email_content(msg) -> tuple[str, list]:
                 attachments.append(f"[XLSX: {filename}]\n" + _extract_xlsx_text(payload))
                 print(f"📎 XLSX adjunto procesado: {filename}")
             elif fname_lower.endswith(".xml") or fname_lower.endswith(".p7m") or ct in ("application/xml", "text/xml", "application/pkcs7-mime"):
-                # .p7m puede ser XML firmado — intentar desenvuelto
                 xml_bytes = payload
                 if fname_lower.endswith(".p7m"):
-                    # Intentar extraer XML del wrapper PKCS#7 buscando la secuencia XML
                     idx = payload.find(b"<?xml")
                     if idx != -1:
                         xml_bytes = payload[idx:]
@@ -647,7 +615,6 @@ def _get_email_content(msg) -> tuple[str, list]:
                 attachments.append(f"[ZIP: {filename}]\n" + _extract_zip_text(payload))
                 print(f"📎 ZIP adjunto procesado: {filename}")
             elif ct.startswith("image/") or fname_lower.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
-                # Guardar imagen en base64 para enviar a Claude Vision
                 img_b64 = base64.b64encode(payload).decode()
                 media_type = ct if ct.startswith("image/") else "image/png"
                 attachments.append(("__IMAGE__", media_type, img_b64, filename))
@@ -667,14 +634,11 @@ def _get_email_content(msg) -> tuple[str, list]:
                     part.get_content_charset() or "utf-8", errors="replace"
                 )
                 html_text = BeautifulSoup(raw, "html.parser").get_text(separator="\n")
-                # Siempre agregar el HTML aunque ya haya texto plano:
-                # el HTML suele tener tablas con totales, más datos
                 if html_text.strip() and html_text.strip() not in body:
                     body += "\n" + html_text
             except Exception:
                 pass
 
-    # Intentar descargar documentos enlazados en el cuerpo del correo
     if body:
         linked_docs = _extract_links_from_body(body)
         attachments.extend(linked_docs)
@@ -723,22 +687,13 @@ def _smart_truncate(text: str, max_chars: int) -> str:
 
 
 def _extract_with_ai(subject: str, body: str, attachments: list) -> Optional[dict]:
-    """
-    Usa claude-sonnet-4-6 para extraer datos de la factura.
-    Sonnet 4.6 es el modelo ideal para este caso de uso:
-    - Mayor precisión en XML DIAN UBL 2.1 vs Haiku
-    - Mejor interpretación de tablas en PDFs complejos
-    - Mayor fiabilidad en campos de retenciones colombianas
-    - Soporte completo de visión para facturas en imagen
-    Retorna dict o None.
-    """
+    """Usa claude-sonnet-4-6 para extraer datos de la factura. Retorna dict o None."""
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-        # ── Construir mensaje multimodal (texto + imágenes si las hay) ─────
         text_parts  = [f"ASUNTO DEL CORREO: {subject}"]
-        image_parts = []  # lista de (media_type, b64, filename)
+        image_parts = []
 
         body_clean = _smart_truncate(body.strip(), 12000)
         if body_clean:
@@ -806,10 +761,8 @@ CONTENIDO COMPLETO:
 {full_text}
 """
 
-        # ── Construir content (texto + imágenes opcionales) ───────────────
         content: list = []
         if image_parts:
-            # Claude admite hasta 20 imágenes por mensaje
             for media_type, b64, fname in image_parts[:5]:
                 content.append({"type": "text", "text": f"[Imagen adjunta: {fname}]"})
                 content.append({"type": "image", "source": {
@@ -820,7 +773,7 @@ CONTENIDO COMPLETO:
         content.append({"type": "text", "text": prompt})
 
         resp = client.messages.create(
-            model=CLAUDE_MODEL,   # claude-sonnet-4-6
+            model=CLAUDE_MODEL,
             max_tokens=4096,
             messages=[{"role": "user", "content": content}]
         )
@@ -829,21 +782,17 @@ CONTENIDO COMPLETO:
         if "NO_ES_FACTURA" in text:
             return None
 
-        # Extraer JSON: intentar directo, luego buscar bloque JSON con llaves balanceadas
         def _extract_json(raw: str) -> Optional[dict]:
-            # 1) Intentar parsear todo el texto directamente
             try:
                 return json.loads(raw)
             except Exception:
                 pass
-            # 2) Buscar bloque ```json ... ``` o ``` ... ```
             block = re.search(r'```(?:json)?\s*([\s\S]*?)```', raw)
             if block:
                 try:
                     return json.loads(block.group(1).strip())
                 except Exception:
                     pass
-            # 3) Encontrar el bloque JSON con llaves balanceadas
             start = raw.find('{')
             if start == -1:
                 return None
@@ -873,12 +822,9 @@ CONTENIDO COMPLETO:
 
 def _is_duplicate_invoice(numero_factura: str, mes_nombre: str = None,
                            proveedor: str = None, fecha: str = None) -> tuple:
-    """Busca la factura en TODAS las hojas mensuales.
-    Retorna (encontrado: bool, fila_num: int, worksheet_object).
-    Cuando numero_factura es N/A usa clave compuesta proveedor+fecha como fallback."""
+    """Busca la factura en TODAS las hojas mensuales."""
     num_clean = str(numero_factura).strip() if numero_factura else ""
     use_num   = bool(num_clean and num_clean not in ("", "N/A"))
-    # Clave secundaria para facturas sin número
     prov_clean  = str(proveedor or "").strip().lower()
     fecha_clean = str(fecha or "").strip()
     use_composite = (not use_num) and bool(prov_clean and prov_clean != "n/a")
@@ -892,12 +838,11 @@ def _is_duplicate_invoice(numero_factura: str, mes_nombre: str = None,
             hojas_revisadas.add(ws.title)
             try:
                 if use_num:
-                    col_values = _api_call_with_retry(ws.col_values, 3)  # col 3 = Número Factura
+                    col_values = _api_call_with_retry(ws.col_values, 3)
                     for i, val in enumerate(col_values[1:], start=2):
                         if str(val).strip() == num_clean:
                             return True, i, ws
                 elif use_composite:
-                    # Leer col 2 (Fecha) y col 4 (Proveedor) para clave compuesta
                     col_fecha = _api_call_with_retry(ws.col_values, 2)
                     col_prov  = _api_call_with_retry(ws.col_values, 4)
                     for i in range(1, max(len(col_fecha), len(col_prov))):
@@ -907,7 +852,6 @@ def _is_duplicate_invoice(numero_factura: str, mes_nombre: str = None,
                             return True, i + 1, ws
             except Exception:
                 continue
-        # Si la hoja del mes no estaba listada, revisarla también
         if mes_nombre and mes_nombre not in hojas_revisadas:
             try:
                 ws = get_sheet(mes_nombre)
@@ -932,18 +876,14 @@ def _is_duplicate_invoice(numero_factura: str, mes_nombre: str = None,
 
 
 def _safe_float(val) -> float:
-    """Convierte a float soportando formato colombiano (coma decimal, punto miles).
-    Ej: '40.350.555,55' → 40350555.55 | '249195,29' → 249195.29"""
+    """Convierte a float soportando formato colombiano (coma decimal, punto miles)."""
     try:
         s = str(val).strip()
         if not s or s in ("", "N/A", "0"):
             return 0.0
-        # Si tiene coma Y punto: punto es miles, coma es decimal
         if "," in s and "." in s:
             s = s.replace(".", "").replace(",", ".")
         elif "," in s:
-            # Solo coma: puede ser decimal colombiano (1234,56) o miles (1.234)
-            # Si hay exactamente una coma con <= 2 dígitos después → decimal
             parts = s.split(",")
             if len(parts) == 2 and len(parts[1]) <= 2:
                 s = s.replace(",", ".")
@@ -960,11 +900,9 @@ def _build_invoice_row(invoice_data: dict, mes_nombre: str) -> list:
     valor_pagado = _safe_float(invoice_data.get("valor_pagado") or 0)
     estado       = str(invoice_data.get("estado") or "PENDIENTE").strip().upper()
 
-    # Si la factura está PAGADA y no se registró valor_pagado, asumir que se pagó todo
     if estado == "PAGADA" and valor_pagado == 0 and valor_total > 0:
         valor_pagado = valor_total
 
-    # Valor por pagar nunca puede ser negativo
     valor_por_pagar = max(0.0, valor_total - valor_pagado)
 
     return [
@@ -1000,17 +938,14 @@ def _build_invoice_row(invoice_data: dict, mes_nombre: str) -> list:
 
 # ── GUARDAR EN GOOGLE SHEETS ──────────────────────────────────────────────────
 def save_to_sheets(invoice_data: dict, email_from: str, forced_mes: str = None):
-    """INSERT si la factura no existe, UPDATE si ya existe con datos incompletos.
-    forced_mes: si se provee, fuerza ese mes ignorando la fecha de la factura."""
+    """INSERT si la factura no existe, UPDATE si ya existe con datos incompletos."""
     try:
         numero    = str(invoice_data.get("numero_factura") or "N/A")
         proveedor = str(invoice_data.get("proveedor")      or "N/A")
 
-        # ── 1. Determinar el mes ────────────────────────────────────────────
         meses_list = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
                       "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
         if forced_mes:
-            # El usuario pidió un mes específico: siempre respetar esa hoja
             mes_nombre = forced_mes.strip().capitalize()
         else:
             fecha_factura_str = str(invoice_data.get("fecha_factura") or "N/A")
@@ -1025,25 +960,18 @@ def save_to_sheets(invoice_data: dict, email_from: str, forced_mes: str = None):
 
         fecha_factura_str = str(invoice_data.get("fecha_factura") or "N/A")
 
-        # ── 2. Buscar duplicado (número o clave compuesta proveedor+fecha) ─
         found, dup_row, dup_ws = _is_duplicate_invoice(
             numero, mes_nombre, proveedor, fecha_factura_str
         )
 
         if found and dup_ws is not None:
-            # UPDATE: actualizar si los nuevos datos son mejores (más completos o estado cambiado)
             try:
                 existing_row_vals = _api_call_with_retry(dup_ws.row_values, dup_row)
-                # col 19 = Valor Total (índice 18), col 21 = Estado (índice 20)
                 existing_total  = _safe_float(existing_row_vals[18]) if len(existing_row_vals) > 18 and existing_row_vals[18] not in ("", "0", "N/A") else 0.0
                 existing_estado = str(existing_row_vals[20]).strip().upper() if len(existing_row_vals) > 20 and existing_row_vals[20] else "PENDIENTE"
                 new_total       = _safe_float(invoice_data.get("valor_total") or 0)
                 new_estado      = str(invoice_data.get("estado") or "PENDIENTE").strip().upper()
 
-                # Condiciones para actualizar:
-                # 1) Datos incompletos (total=0) y ahora tenemos total
-                # 2) Estado mejorado: PENDIENTE/VENCIDA → PAGADA
-                # 3) Valor total diferente (corrección de importe)
                 estado_mejoro = (existing_estado in ("PENDIENTE", "VENCIDA") and new_estado == "PAGADA")
                 datos_mejoran = (new_total > 0 and existing_total == 0)
                 total_cambio  = (new_total > 0 and existing_total > 0 and abs(new_total - existing_total) > 1)
@@ -1062,7 +990,6 @@ def save_to_sheets(invoice_data: dict, email_from: str, forced_mes: str = None):
                 print(f"⚠️  No se pudo procesar duplicado {numero}: {e_upd}")
                 return False
 
-        # ── 3. INSERT ──────────────────────────────────────────────────────
         row = _build_invoice_row(invoice_data, mes_nombre)
         ws  = get_sheet(mes_nombre)
         _api_call_with_retry(ws.append_row, row, value_input_option="USER_ENTERED")
@@ -1077,35 +1004,32 @@ def save_to_sheets(invoice_data: dict, email_from: str, forced_mes: str = None):
 
 
 def export_to_excel() -> str:
-    """Descarga todos los registros de todas las hojas mensuales y genera un Excel con múltiples pestañas."""
+    """Descarga todos los registros de todas las hojas mensuales y genera un Excel."""
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment
 
     try:
-        # Usar spreadsheet cacheado — NO repite open_by_key
         spreadsheet = _get_spreadsheet()
         worksheets = _api_call_with_retry(spreadsheet.worksheets)
 
         wb = openpyxl.Workbook()
-        wb.remove(wb.active)  # Eliminar la hoja por defecto
+        wb.remove(wb.active)
 
-        # Procesar solo las hojas que son meses (usa la constante global MESES)
         for ws_gsheet in worksheets:
             if ws_gsheet.title in MESES:
                 rows = ws_gsheet.get_all_values()
-                if not rows:  # Saltar hojas vacías
+                if not rows:
                     continue
 
                 sheet = wb.create_sheet(title=ws_gsheet.title)
                 for i, row in enumerate(rows, 1):
                     sheet.append(row)
-                    if i == 1:  # Formatear encabezados
+                    if i == 1:
                         for cell in sheet[1]:
                             cell.font = Font(bold=True, color="FFFFFF")
                             cell.fill = PatternFill("solid", fgColor="1F4E79")
                             cell.alignment = Alignment(horizontal="center")
 
-        # Si no hay hojas mensuales, crear una por defecto
         if not wb.worksheets:
             sheet = wb.create_sheet(title="Sin Datos")
             sheet.append(["No hay datos disponibles"])
