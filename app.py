@@ -182,13 +182,114 @@ def connect_imap() -> imaplib.IMAP4_SSL:
     return mail
 
 
+def _parse_imap_folder_name(raw_line: str) -> str:
+    """Extrae el nombre de carpeta de una línea LIST de IMAP.
+
+    Formatos posibles que devuelve Gmail:
+      (\\HasNoChildren) "/" "[Gmail]/Todos"
+      (\\HasNoChildren \\All) "/" "[Gmail]/All Mail"
+      (\\HasNoChildren) "/" INBOX
+    Retorna el nombre SIN comillas externas, listo para _imap_select().
+    """
+    # Separar por el delimitador "/" o NIL
+    import re as _re
+    # Buscar el último token: puede estar entre comillas o sin ellas
+    m = _re.search(r'"/" "(.+)"$', raw_line)
+    if m:
+        return m.group(1)
+    m = _re.search(r'"/" ([^\s"]+)$', raw_line)
+    if m:
+        return m.group(1)
+    # NIL como separador
+    m = _re.search(r'NIL "(.+)"$', raw_line)
+    if m:
+        return m.group(1)
+    m = _re.search(r'NIL ([^\s"]+)$', raw_line)
+    if m:
+        return m.group(1)
+    return ""
+
+
+def _imap_select(mail: imaplib.IMAP4_SSL, folder_name: str) -> bool:
+    """Selecciona una carpeta IMAP con el quoting correcto.
+
+    imaplib NO hace quoting automático. Los nombres con espacios o corchetes
+    deben enviarse entre comillas dobles en el protocolo IMAP.
+    Esta función siempre usa comillas para máxima compatibilidad.
+    """
+    # Limpiar comillas previas para no doblarlas
+    clean = folder_name.strip().strip('"')
+    try:
+        status, _ = mail.select(f'"{clean}"', readonly=True)
+        return status == 'OK'
+    except Exception:
+        return False
+
+
+def _find_all_mail_folder(mail: imaplib.IMAP4_SSL) -> str:
+    """Descubre el nombre real de la carpeta AllMail/Todos usando LIST.
+
+    Retorna el nombre limpio (sin comillas) o None si no se encuentra.
+    El caller debe usar _imap_select() para seleccionarla.
+
+    Prioridades:
+    1. Carpeta con atributo IMAP \\All  (RFC 6154 — la más fiable)
+    2. Carpeta cuyo nombre contenga palabras clave multiidioma
+    3. None → el caller usará INBOX como fallback
+    """
+    try:
+        status, folder_list = mail.list('""', '*')
+        if status != 'OK' or not folder_list:
+            print("⚠️  No se pudo listar carpetas IMAP")
+            return None
+
+        keywords_allmail = ['all mail', 'todos', 'tout', 'alle', 'tutti', 'tous']
+        candidate_by_keyword = None
+
+        for raw in folder_list:
+            if not raw:
+                continue
+            decoded = raw.decode('utf-8', errors='replace') if isinstance(raw, bytes) else str(raw)
+
+            name = _parse_imap_folder_name(decoded)
+            if not name:
+                continue
+
+            # Prioridad 1: atributo \All
+            if r'\All' in decoded or r'\all' in decoded:
+                print(f"📁 All Mail encontrado por atributo \\All: {name}")
+                return name
+
+            # Prioridad 2: palabra clave en el nombre
+            if candidate_by_keyword is None:
+                name_lower = name.lower()
+                for kw in keywords_allmail:
+                    if kw in name_lower:
+                        candidate_by_keyword = name
+                        break
+
+        if candidate_by_keyword:
+            print(f"📁 All Mail encontrado por nombre: {candidate_by_keyword}")
+            return candidate_by_keyword
+
+    except Exception as e:
+        print(f"⚠️  Error listando carpetas IMAP: {e}")
+
+    return None
+
+
 def search_invoice_emails(mail: imaplib.IMAP4_SSL) -> list:
     """Devuelve los IDs de los 500 correos más recientes desde UN solo folder."""
-    folders_to_try = ['"[Gmail]/All Mail"', '[Gmail]/All Mail', 'All Mail', 'INBOX']
+    all_mail = _find_all_mail_folder(mail)
+    folders_to_try = [all_mail] if all_mail else []
+    folders_to_try.append('INBOX')
+
     for folder in folders_to_try:
+        if not folder:
+            continue
         try:
-            status, _ = mail.select(folder, readonly=True)
-            if status != 'OK':
+            ok = _imap_select(mail, folder)
+            if not ok:
                 continue
             _, data = mail.search(None, "ALL")
             if not data or not data[0]:
@@ -200,16 +301,7 @@ def search_invoice_emails(mail: imaplib.IMAP4_SSL) -> list:
                 return recientes
         except Exception:
             continue
-    # Fallback INBOX
-    try:
-        mail.select('INBOX')
-        _, data = mail.search(None, "ALL")
-        ids = [uid.decode() for uid in data[0].split() if uid] if data and data[0] else []
-        recientes = sorted(ids, key=lambda x: int(x) if x.isdigit() else 0)[-500:]
-        print(f"📬 {len(recientes)} correos para analizar [INBOX fallback]")
-        return recientes
-    except Exception:
-        return []
+    return []
 
 
 # Mapa de meses español → número
@@ -226,7 +318,11 @@ _MES_EN = {
 
 
 def search_emails_by_month(mail: imaplib.IMAP4_SSL, mes_nombre: str, year: int = None) -> list:
-    """Busca TODOS los correos del mes usando IMAP SINCE/BEFORE."""
+    """Busca TODOS los correos del mes usando IMAP SINCE/BEFORE.
+
+    Descubre el folder All Mail dinámicamente para soportar Gmail en cualquier
+    idioma (español → Todos, inglés → All Mail, etc.).
+    """
     mes_nombre = mes_nombre.lower().strip()
     mes_num = _MES_NUM.get(mes_nombre)
     if not mes_num:
@@ -236,45 +332,34 @@ def search_emails_by_month(mail: imaplib.IMAP4_SSL, mes_nombre: str, year: int =
     if year is None:
         year = datetime.now().year
 
-    mes_siguiente = mes_num + 1 if mes_num < 12 else 1
+    mes_siguiente  = mes_num + 1 if mes_num < 12 else 1
     year_siguiente = year if mes_num < 12 else year + 1
-    fecha_inicio = f"01-{_MES_EN[mes_num]}-{year}"
-    fecha_fin    = f"01-{_MES_EN[mes_siguiente]}-{year_siguiente}"
-    criterio     = f'(SINCE "{fecha_inicio}" BEFORE "{fecha_fin}")'
+    fecha_inicio   = f"01-{_MES_EN[mes_num]}-{year}"
+    fecha_fin      = f"01-{_MES_EN[mes_siguiente]}-{year_siguiente}"
+    criterio       = f'(SINCE "{fecha_inicio}" BEFORE "{fecha_fin}")'
 
-    folders_to_try = [
-        '"[Gmail]/All Mail"',
-        '[Gmail]/All Mail',
-        'All Mail',
-        'INBOX',
-    ]
+    all_mail_folder = _find_all_mail_folder(mail)
+    folders_to_try = [all_mail_folder] if all_mail_folder else []
+    folders_to_try.append('INBOX')
 
     for folder in folders_to_try:
+        if not folder:
+            continue
         try:
-            status, _ = mail.select(folder, readonly=True)
-            if status != 'OK':
+            ok = _imap_select(mail, folder)
+            if not ok:
                 continue
             _, data = mail.search(None, criterio)
             if not data or not data[0]:
+                print(f"📭 0 correos en {mes_nombre.capitalize()} {year} [{folder}]")
                 continue
             ids = [uid.decode() for uid in data[0].split() if uid]
             if ids:
                 print(f"📬 {len(ids)} correos en {mes_nombre.capitalize()} {year} [{folder}]")
                 return sorted(ids, key=lambda x: int(x) if x.isdigit() else 0)
         except Exception as ex:
-            print(f"⚠️  Folder {folder} no disponible: {ex}")
+            print(f"⚠️  Folder {folder} error: {ex}")
             continue
-
-    # Último recurso: INBOX sin filtro de fecha reducido
-    try:
-        mail.select('INBOX')
-        _, data = mail.search(None, criterio)
-        ids = [uid.decode() for uid in data[0].split() if uid] if data and data[0] else []
-        if ids:
-            print(f"📬 {len(ids)} correos en INBOX — {mes_nombre.capitalize()} {year}")
-            return sorted(ids, key=lambda x: int(x) if x.isdigit() else 0)
-    except Exception:
-        pass
 
     print(f"📭 No se encontraron correos en {mes_nombre.capitalize()} {year}")
     return []
