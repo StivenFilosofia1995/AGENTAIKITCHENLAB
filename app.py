@@ -19,7 +19,7 @@ from email.header import decode_header
 import base64
 import io
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 # ── MODELO ────────────────────────────────────────────────────────────────────
@@ -156,19 +156,56 @@ def setup_sheets():
 
 
 def _load_processed_ids() -> set:
+    """Carga los Message-IDs ya procesados desde disco.
+
+    Formato en JSON: {"<msg-id>": "YYYY-MM-DD", ...}
+    Los IDs de más de 90 días se descartan para que el archivo no crezca
+    indefinidamente. IDs sin fecha (formato lista antiguo) se migran con
+    fecha de hoy para no perder el historial existente.
+    """
     try:
-        if os.path.exists(PROCESSED_FILE):
-            with open(PROCESSED_FILE) as f:
-                return set(json.load(f))
+        if not os.path.exists(PROCESSED_FILE):
+            return set()
+        with open(PROCESSED_FILE) as f:
+            raw = json.load(f)
+
+        cutoff = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+
+        # Migrar formato antiguo (lista) → dict
+        if isinstance(raw, list):
+            today = datetime.now().strftime("%Y-%m-%d")
+            raw = {mid: today for mid in raw}
+            with open(PROCESSED_FILE, "w") as f:
+                json.dump(raw, f)
+
+        # Filtrar expirados
+        return {mid for mid, fecha in raw.items() if fecha >= cutoff}
+
     except Exception:
-        pass
-    return set()
+        return set()
 
 
 def _save_processed_ids(ids: set):
+    """Guarda los Message-IDs procesados con su fecha, descartando los >90 días."""
     try:
+        existing: dict = {}
+        if os.path.exists(PROCESSED_FILE):
+            with open(PROCESSED_FILE) as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                existing = raw
+
+        cutoff = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+        today  = datetime.now().strftime("%Y-%m-%d")
+
+        # Combinar: existentes no expirados + nuevos
+        merged = {mid: fecha for mid, fecha in existing.items() if fecha >= cutoff}
+        for mid in ids:
+            if mid not in merged:
+                merged[mid] = today
+
         with open(PROCESSED_FILE, "w") as f:
-            json.dump(list(ids), f)
+            json.dump(merged, f)
     except Exception as e:
         print(f"⚠️ No se pudo guardar IDs procesados: {e}")
 
@@ -401,7 +438,14 @@ def process_emails_for_month(mes_nombre: str, year: int = None):
     facturas_encontradas = 0
     omitidos = 0
     errores = 0
-    seen_msgids: set = set()
+
+    # ── IDs persistentes: evita reprocesar correos ya vistos ─────────────────
+    # Se guarda en PROCESSED_FILE (JSON). Incluye tanto los que generaron factura
+    # como los que fueron descartados (pre-filtro o NO_ES_FACTURA de Claude),
+    # para no gastar tokens en ellos nunca más.
+    processed_ids: set = _load_processed_ids()
+    nuevos_ids: set = set()   # acumula los procesados en esta ejecución
+    # ─────────────────────────────────────────────────────────────────────────
 
     for idx, eid in enumerate(email_ids, 1):
         try:
@@ -437,14 +481,18 @@ def process_emails_for_month(mes_nombre: str, year: int = None):
             from_  = _decode_str(msg.get("From", ""))
 
             msg_id = str(msg.get("Message-ID", "")).strip()
-            if msg_id and msg_id in seen_msgids:
+
+            # ── Saltar si ya fue procesado en una ejecución anterior ──────────
+            if msg_id and msg_id in processed_ids:
+                print(f"[{idx}/{total}] ♻️  Ya procesado, omitiendo: {asunto[:55]}")
                 omitidos += 1
                 continue
-            if msg_id:
-                seen_msgids.add(msg_id)
+            # ─────────────────────────────────────────────────────────────────
 
             body, attachments = _get_email_content(msg)
             if not body.strip() and not attachments:
+                if msg_id:
+                    nuevos_ids.add(msg_id)   # guardar para no revisitar
                 omitidos += 1
                 continue
 
@@ -454,11 +502,17 @@ def process_emails_for_month(mes_nombre: str, year: int = None):
             body_preview = body[:300] if body else ""
             if _should_skip_email(asunto, body_preview):
                 print(f"[{idx}/{total}] ⏭️  Omitido por pre-filtro: {asunto[:60]}")
+                if msg_id:
+                    nuevos_ids.add(msg_id)   # marcado para no volver a revisar
                 omitidos += 1
                 continue
             # ─────────────────────────────────────────────────────────────────
 
             datos = _extract_with_ai(asunto, body, attachments)
+            # Marcar como procesado independientemente del resultado de Claude
+            if msg_id:
+                nuevos_ids.add(msg_id)
+
             if datos:
                 if not datos.get("mes") or str(datos.get("mes")).upper() in ("", "N/A"):
                     datos["mes"] = mes_nombre_cap
@@ -471,6 +525,12 @@ def process_emails_for_month(mes_nombre: str, year: int = None):
             print(traceback.format_exc())
             errores += 1
             continue
+
+    # ── Persistir IDs de esta ejecución ──────────────────────────────────────
+    if nuevos_ids:
+        _save_processed_ids(processed_ids | nuevos_ids)
+        print(f"💾 {len(nuevos_ids)} nuevos IDs guardados ({len(processed_ids)+len(nuevos_ids)} total)")
+    # ─────────────────────────────────────────────────────────────────────────
 
     try:
         mail.logout()
@@ -1284,9 +1344,15 @@ def update_invoice_status(numero_factura: str, nuevo_estado: str,
 
 
 def export_to_excel() -> str:
-    """Descarga todos los registros de todas las hojas mensuales y genera un Excel."""
+    """Descarga todos los registros de todas las hojas mensuales y genera un Excel.
+
+    Columnas excluidas del archivo final (se conservan en Sheets internamente):
+      Estado, Valor Pagado, Valor Por Pagar, Fecha Pago
+    """
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment
+
+    EXCLUDE_COLS = {"Estado", "Valor Pagado", "Valor Por Pagar", "Fecha Pago"}
 
     try:
         spreadsheet = _get_spreadsheet()
@@ -1296,19 +1362,25 @@ def export_to_excel() -> str:
         wb.remove(wb.active)
 
         for ws_gsheet in worksheets:
-            if ws_gsheet.title in MESES:
-                rows = ws_gsheet.get_all_values()
-                if not rows:
-                    continue
+            if ws_gsheet.title not in MESES:
+                continue
+            rows = ws_gsheet.get_all_values()
+            if not rows:
+                continue
 
-                sheet = wb.create_sheet(title=ws_gsheet.title)
-                for i, row in enumerate(rows, 1):
-                    sheet.append(row)
-                    if i == 1:
-                        for cell in sheet[1]:
-                            cell.font = Font(bold=True, color="FFFFFF")
-                            cell.fill = PatternFill("solid", fgColor="1F4E79")
-                            cell.alignment = Alignment(horizontal="center")
+            # Determinar índices de columnas a incluir usando la cabecera
+            header = rows[0]
+            keep_idx = [i for i, col in enumerate(header) if col not in EXCLUDE_COLS]
+
+            sheet = wb.create_sheet(title=ws_gsheet.title)
+            for row_num, row in enumerate(rows, 1):
+                filtered = [row[i] if i < len(row) else "" for i in keep_idx]
+                sheet.append(filtered)
+                if row_num == 1:
+                    for cell in sheet[1]:
+                        cell.font      = Font(bold=True, color="FFFFFF")
+                        cell.fill      = PatternFill("solid", fgColor="1F4E79")
+                        cell.alignment = Alignment(horizontal="center")
 
         if not wb.worksheets:
             sheet = wb.create_sheet(title="Sin Datos")
