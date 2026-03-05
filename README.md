@@ -1,17 +1,17 @@
 # 🤖 Sistema de Extracción de Facturas con IA
 
-Sistema automático que lee correos Gmail, extrae datos de facturas usando IA (Gemini), y los guarda en Excel con un dashboard en tiempo real.
+Sistema automático que lee correos Gmail, extrae datos de facturas usando IA (Claude de Anthropic), y los guarda en Google Sheets con un dashboard en tiempo real.
 
 ## 📋 Características
 
 - ✅ **Lectura automática de Gmail** vía IMAP
-- ✅ **Extracción de datos con IA** (Google Gemini Pro)
-- ✅ **Procesamiento de PDFs y Word** adjuntos
+- ✅ **Extracción de datos con IA** (Claude Sonnet — Anthropic)
+- ✅ **Procesamiento de PDFs, Word, XML DIAN y XLSX** adjuntos
 - ✅ **API REST con FastAPI** para integración
 - ✅ **Dashboard en tiempo real** con WebSocket
-- ✅ **Excel profesional** con formateo y gráficos
+- ✅ **Exportación a Excel** bajo demanda
 - ✅ **Logs en vivo** del procesamiento
-- ✅ **Límite configurable** de emails procesados
+- ✅ **Google Sheets** como almacenamiento principal (organizado por mes)
 
 ---
 
@@ -24,10 +24,7 @@ cd "C:\Users\Stiven I.A\Desktop\AI_LANGCHAIN STPM"
 
 ### 2️⃣ Crear y Activar Entorno Virtual
 ```powershell
-# Si aún no lo has hecho
 python -m venv AGENT_AI_ENV
-
-# Activar
 .\AGENT_AI_ENV\Scripts\Activate.ps1
 ```
 
@@ -40,10 +37,7 @@ pip install -r requirements.txt
 Crea un archivo `.env` en la carpeta raíz:
 
 ```env
-# Google API
-GOOGLE_API_KEY=tu_google_api_key_aqui
-
-# Gmail - CREDENCIALES
+# Gmail
 EMAIL_USER=tu@gmail.com
 EMAIL_PASS=contraseña_de_aplicación_16_caract
 
@@ -52,22 +46,19 @@ IMAP_HOST=imap.gmail.com
 IMAP_PORT=993
 IMAP_FOLDER=INBOX
 
-# Excel
-EXCEL_OUTPUT_PATH=facturas_seguimiento.xlsx
+# Claude AI (Anthropic)
+ANTHROPIC_API_KEY=sk-ant-api03-...
 
-# Scheduler
-CHECK_INTERVAL_MINUTES=30
-
-# SerpAPI (Opcional)
-SERPAPI_API_KEY=tu_serpapi_key_opcional
+# Google Sheets
+GOOGLE_SHEETS_ID=tu_id_de_google_sheets
 ```
 
 ### 5️⃣ Obtener Credenciales
 
-#### Google Gemini API Key:
-1. Ve a: https://ai.google.dev/
-2. Click "Get API Key"
-3. Copia tu clave
+#### Claude API Key (Anthropic):
+1. Ve a: https://console.anthropic.com
+2. API Keys → Crear nueva clave
+3. Cópiala en `ANTHROPIC_API_KEY`
 
 #### Gmail App Password:
 1. Ve a: https://myaccount.google.com/apppasswords
@@ -75,192 +66,103 @@ SERPAPI_API_KEY=tu_serpapi_key_opcional
 3. Copia la contraseña de 16 caracteres
 4. Pégala en `EMAIL_PASS`
 
+#### Google Sheets + Service Account:
+1. Ve a: https://console.cloud.google.com
+2. Crea proyecto → Activa Google Sheets API y Google Drive API
+3. IAM → Cuentas de servicio → Crear → Descargar JSON → guardar como `service_account.json`
+4. Comparte tu Google Sheet con el email de la cuenta de servicio
+
 ---
 
 ## 🎮 Ejecutar el Sistema
 
-### Opción 1: Solo Agente (Sin Dashboard)
 ```powershell
-# Ejecución única
-.\AGENT_AI_ENV\Scripts\python.exe app.py --once
+# Opción 1: Script directo
+.\AGENT_AI_ENV\Scripts\Activate.ps1
+python start.py
 
-# Ejecución continua (cada 30 min)
-.\AGENT_AI_ENV\Scripts\python.exe app.py
+# Opción 2: Doble clic en el archivo .bat
+start_server.bat
 ```
 
-### Opción 2: FastAPI + Dashboard 🎯 (RECOMENDADO)
+Abre en el navegador:
+- 🎨 **Dashboard:** `http://localhost:9000/dashboard.html`
+- 📚 **API Docs:** `http://localhost:9000/docs`
 
-#### Terminal 1 - Backend FastAPI:
-```powershell
-# Instalar FastAPI si no lo has hecho
-pip install fastapi uvicorn
+---
 
-# Ejecutar servidor
-.\AGENT_AI_ENV\Scripts\python.exe -m uvicorn backend:app --reload --host 0.0.0.0 --port 8000
-```
+## 📊 Rutas de la API
 
-#### Terminal 2 - Ver Dashboard:
-```
-🌐 Abre en tu navegador: http://localhost:8000/docs
-💻 O: http://localhost:8000/dashboard.html
+```bash
+GET  /api/stats          # Estadísticas generales
+GET  /api/invoices       # Lista de facturas
+GET  /api/months         # Meses con datos
+POST /api/process        # Procesar correos del mes actual
+POST /api/process-month  # Procesar mes específico {"mes":"febrero","year":2026}
+POST /api/export-excel   # Descargar Excel
+GET  /api/status         # Estado del sistema
+GET  /api/logs           # Logs del proceso
+WS   /ws/logs            # WebSocket para logs en tiempo real
 ```
 
 ---
 
-## 📊 Rutas de la API FastAPI
-
-### Obtener Estadísticas
-```bash
-GET http://localhost:8000/api/stats
-```
-
-Respuesta:
-```json
-{
-  "total": 15,
-  "pendientes": 8,
-  "pagadas": 5,
-  "vencidas": 2,
-  "total_cop": 5000000,
-  "total_usd": 1200.50
-}
-```
-
-### Obtener Facturas
-```bash
-GET http://localhost:8000/api/invoices?limit=10
-```
-
-### Procesar Emails
-```bash
-POST http://localhost:8000/api/process
-```
-
-### WebSocket para Logs
-```
-WS ws://localhost:8000/ws/logs
-```
-
-### Estado del Sistema
-```bash
-GET http://localhost:8000/api/status
-```
-
----
-
-## 📝 Estructura de Archivos
+## 🗂️ Estructura de Archivos
 
 ```
 AI_LANGCHAIN STPM/
-├── app.py               # 🤖 Agente principal
-├── backend.py           # 🚀 API FastAPI
+├── app.py               # 🤖 Agente principal (IMAP + Claude AI + Sheets)
+├── backend.py           # 🚀 API FastAPI + WebSocket + Scheduler
 ├── dashboard.html       # 🎨 Dashboard en tiempo real
+├── start.py             # ▶️  Punto de entrada
 ├── requirements.txt     # 📦 Dependencias
-├── .env                 # 🔐 Variables de entorno
-├── AGENT_AI_ENV/        # Entorno virtual
-├── facturas_seguimiento.xlsx  # 📊 Excel con datos
-└── processed_emails.json      # 📄 IDs procesados
+├── railway.toml         # ☁️  Config despliegue Railway
+├── .env                 # 🔐 Variables de entorno (NO subir a Git)
+├── service_account.json # 🔑 Credenciales Google (NO subir a Git)
+└── AGENT_AI_ENV/        # 🐍 Entorno virtual Python
 ```
 
 ---
 
-## 🔧 Configuración Avanzada
+## 🧠 Modelo de IA
 
-### Cambiar Límite de Emails
-En `app.py`, línea ~498:
-```python
-all_ids = all_ids[-10:] if len(all_ids) > 10 else all_ids  # Cambiar 10 por el número deseado
+El agente usa **Claude Sonnet** (`claude-sonnet-4-6`) de Anthropic para:
+- Detectar si un correo contiene una factura electrónica DIAN o cuenta de cobro
+- Extraer todos los campos contables (NIT, subtotal, IVA, retenciones, total)
+- Interpretar PDFs con tablas complejas, XMLs DIAN UBL 2.1 e imágenes de facturas
+
+---
+
+## 🔒 Seguridad
+
+El archivo `.gitignore` ya protege automáticamente:
+```
+.env                    ← API keys, credenciales de correo
+service_account.json    ← Credenciales de Google
+AGENT_AI_ENV/           ← Entorno virtual
+processed_emails.json   ← Cache local
+*.xlsx                  ← Archivos Excel generados
 ```
 
-### Cambiar Modelo de IA
-En `app.py`, línea 242:
-```python
-model="gemini-pro",  # O "gemini-2.5-flash" para más rápido
-```
+**Nunca** compartas ni subas estos archivos a GitHub.
 
-### Intervalo de Procesamiento
-En `.env`:
-```env
-CHECK_INTERVAL_MINUTES=30  # Procesar cada 30 minutos
-```
+---
+
+## ☁️ Deploy en Railway
+
+Ver `GUIA_DEPLOY_RAILWAY.md` para instrucciones detalladas paso a paso.
 
 ---
 
 ## 🚨 Solución de Problemas
 
-### ❌ "ModuleNotFoundError: No module named 'schedule'"
-```bash
-pip install schedule
-# O instalar todas las dependencias:
-pip install -r requirements.txt
-```
-
-### ❌ "Error IMAP login"
-- Verifica que `EMAIL_USER` y `EMAIL_PASS` sean correctos
-- Para Gmail, DEBES usar contraseña de aplicación, no tu contraseña normal
-- Ve a: https://myaccount.google.com/apppasswords
-
-### ❌ "getaddrinfo failed"
-- Verifica `IMAP_HOST=imap.gmail.com` (sin tu email)
-- Verifica conexión a internet
-
-### ❌ Dashboard en blanco
-- Abre http://localhost:8000/docs (Swagger UI)
-- Verifica que backend.py está ejecutándose
-- Abre consola del navegador (F12) para ver errores
-
----
-
-## 📈 Monitoreo
-
-### Logs del Agente
-```powershell
-# En la terminal donde corre app.py verás logs como:
-🔍 Revisando correos: 26/02/2026 10:23:41
-📨 2 correos nuevos para analizar
-📧 Procesando UID: 12345
-✅ FACTURA: FAC-001 | Proveedor XYZ | 100000 COP
-💾 Factura guardada → fila 5
-```
-
-### Excel
-Abre `facturas_seguimiento.xlsx`:
-- Hoja "📋 Facturas" con todos los datos
-- Hoja "📊 Dashboard" con gráficos y resúmenes
-
-### WebSocket en tiempo real
-El dashboard muestra logs en vivo mientras se procesan emails.
-
----
-
-## 🤝 API REST Completa (Swagger)
-
-Cuando el backend esté ejecutándose, accede a:
-```
-http://localhost:8000/docs
-```
-
-Aquí puedes probar todas las rutas interactivamente.
-
----
-
-## 📞 Soporte
-
-Si tienes dudas:
-1. Revisa los logs en la terminal
-2. Verifica las variables en `.env`
-3. Comprueba que tienes credenciales correctas
-4. Abre el navegador con F12 para ver errores del frontend
-
----
-
-## ⭐ Tips
-
-- 💡 Mantén el dashboard abierto para monitorear en tiempo real
-- 🔄 El agente se ejecuta automáticamente cada 30 minutos
-- 📱 El dashboard funciona en móvil también
-- 🎯 Usa la API para integraciones con otros sistemas
-- 📊 Descarga los Excel regularmente para auditoría
+| Error | Causa | Solución |
+|-------|-------|---------|
+| `ModuleNotFoundError` | Falta dependencia | `pip install -r requirements.txt` |
+| `IMAP login failed` | Contraseña incorrecta | Verifica `EMAIL_PASS` en `.env` |
+| `Error 429 Google Sheets` | Cuota excedida | El sistema reintenta automáticamente |
+| `Dashboard en blanco` | Backend no corre | Ejecuta `python start.py` |
+| `WebSocket no conecta` | Puerto bloqueado | Abre F12 y verifica consola del navegador |
 
 ---
 
