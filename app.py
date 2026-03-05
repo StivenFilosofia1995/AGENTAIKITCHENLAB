@@ -669,14 +669,39 @@ def _extract_with_ai(subject: str, body: str, attachments: list) -> Optional[dic
         full_text = "\n\n".join(text_parts)
 
         prompt = f"""Eres un experto en contabilidad colombiana y facturas electrónicas DIAN.
-Analiza TODO el contenido que se te da (cuerpo del correo, adjuntos PDF, XML DIAN, XLSX, imágenes) y extrae los datos de la factura.
+Analiza TODO el contenido que se te da (cuerpo del correo, adjuntos PDF, XML DIAN, XLSX, imágenes).
 
-REGLAS ESTRICTAS:
-1. Si NO existe ninguna factura en el contenido, responde EXACTAMENTE: NO_ES_FACTURA
-2. Si HAY factura, extrae TODOS los campos posibles aunque sean parciales.
-3. Números: usa formato decimal con punto (ej: 1234567.50). Sin puntos de miles. Si el campo no aparece usa 0.
-4. Texto: valor exacto tal como aparece. Si no aparece usa "N/A".
-5. numero_factura: busca 'No. Factura', 'Número', 'FACT-', 'FE-', 'FV', 'FES', 'Invoice No', campo ID en XML DIAN.
+═══════════════════════════════════════════════════════
+DOCUMENTOS QUE DEBES RECHAZAR — responde NO_ES_FACTURA
+═══════════════════════════════════════════════════════
+Rechaza INMEDIATAMENTE si el documento es alguno de estos tipos (aunque mencione valores o montos):
+- Cuenta de cobro (no es factura electrónica DIAN, no tiene CUFE/UUID)
+- Solicitud de certificado (certificado de retención, certificado tributario, etc.)
+- Solicitud de información (pedidos de datos, formularios, consultas)
+- Link / botón de pago (notificaciones PSE, Wompi, PayU, Nequi, Bancolombia, etc.)
+- Cambio de contraseña / clave (correos de seguridad, reset, verificación 2FA)
+- Cotizaciones sin número de factura DIAN oficial
+- Recibos de caja o documentos equivalentes sin CUFE
+- Extractos bancarios
+- Publicidad o boletines comerciales
+- Correos de soporte o servicio al cliente sin factura adjunta
+
+═══════════════════════════════════════════════════════
+DOCUMENTOS QUE SÍ DEBES PROCESAR
+═══════════════════════════════════════════════════════
+Solo procesa si es UNA FACTURA DE VENTA electrónica con:
+- Estado PENDIENTE (factura emitida, aún no pagada), O
+- Estado PAGADA (factura con comprobante de pago o nota 'cancelado/pagado')
+Puede ser XML DIAN UBL 2.1, PDF con datos de factura, imagen de factura, o XLSX de factura.
+
+═══════════════════════════════════════════════════════
+REGLAS DE EXTRACCIÓN (solo si es factura válida)
+═══════════════════════════════════════════════════════
+1. Si NO es factura válida según criterios anteriores → responde EXACTAMENTE: NO_ES_FACTURA
+2. Si SÍ es factura válida → extrae TODOS los campos posibles aunque sean parciales.
+3. Números: formato decimal con punto (ej: 1234567.50). Sin puntos de miles. Si no aparece → 0.
+4. Texto: valor exacto tal como aparece. Si no aparece → "N/A".
+5. numero_factura: busca 'No. Factura', 'Número', 'FACT-', 'FE-', 'FV', 'FES', 'Invoice No', CUFE/UUID en XML DIAN.
 6. proveedor: quien EMITE (vende). cliente: quien RECIBE (compra/paga).
 7. numero_id: NIT sin dígito verificador (ej: '900123456' no '900123456-1').
 8. iva: suma de todos los TaxAmount con TaxCode=01 o nombre 'IVA'.
@@ -684,11 +709,11 @@ REGLAS ESTRICTAS:
 10. rete_ica: Impuesto de Industria y Comercio retenido.
 11. retencion_fuente: retención en la fuente (busca 'RteFte', 'RetFte', 'Retención fuente').
 12. valor_total: valor final a pagar después de impuestos y retenciones.
-13. estado: PAGADA si aparece 'pagado/cancelado', VENCIDA si venció sin pagar, si no PENDIENTE.
-14. clasificacion: Servicios/Productos/Mixto según descripción de ítems de la factura.
+13. estado: PAGADA si aparece 'pagado/cancelado/recibido', VENCIDA si venció sin pagar, si no → PENDIENTE.
+14. clasificacion: Servicios/Productos/Mixto según descripción de ítems.
 15. En XML DIAN UBL 2.1: LineExtensionAmount=subtotal, TaxInclusiveAmount o PayableAmount=valor_total.
 
-Respóndeme ÚNICAMENTE con el JSON, sin texto antes ni después, sin bloques ```:
+Respóndeme ÚNICAMENTE con el JSON o con NO_ES_FACTURA. Sin texto antes ni después, sin bloques ```:
 {JSON_SCHEMA}
 
 CONTENIDO COMPLETO:
