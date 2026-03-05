@@ -19,7 +19,7 @@ import asyncio, threading, json, os, schedule, time
 from datetime import datetime
 from typing import List, Dict, Optional
 
-fastapi_app = FastAPI(title="Invoice Agent API", version="5.1.0")
+fastapi_app = FastAPI(title="Invoice Agent API", version="5.0.0")
 fastapi_app.add_middleware(
     CORSMiddleware, allow_origins=["*"],
     allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
@@ -27,6 +27,7 @@ fastapi_app.add_middleware(
 
 # ── MODELO CHAT ───────────────────────────────────────────────────────────────
 # claude-sonnet-4-6: mismo modelo que usa app.py para consistencia
+# Garantiza que el chat del dashboard use el mismo nivel de inteligencia
 CLAUDE_CHAT_MODEL = "claude-sonnet-4-6"
 
 # ── LOG STORE ─────────────────────────────────────────────────────────────────
@@ -67,11 +68,6 @@ scheduler_state = {
 }
 _scheduler_thread: Optional[threading.Thread] = None
 _scheduler_stop = threading.Event()
-
-# ── LOCK GLOBAL PARA GSPREAD ──────────────────────────────────────────────────
-# Protege las variables globales de gspread en app_module contra race conditions
-# cuando el scheduler y el proceso manual se ejecutan casi simultáneamente.
-_gspread_lock = threading.Lock()
 
 
 # ── PROCESO PRINCIPAL ──────────────────────────────────────────────────────────
@@ -199,21 +195,10 @@ _SHEETS_CACHE_TTL = 90  # segundos
 
 
 def invalidate_sheets_cache():
-    """Invalida el cache de DataFrames Y el cache de worksheets de gspread.
-
-    CRÍTICO: también limpia _gspread_worksheets y _gspread_spreadsheet en
-    app_module. Sin esto, si se crea una hoja nueva durante la sesión (cambio
-    de mes) el agente seguiría usando la referencia vieja y los datos nuevos
-    no se verían en el dashboard hasta reiniciar el servidor.
-    """
+    """Invalida el cache para forzar recarga en la proxima llamada."""
     global _sheets_cache_df, _sheets_cache_time
-    with _gspread_lock:
-        _sheets_cache_df = None
-        _sheets_cache_time = 0.0
-        # Limpiar cache de worksheets en app_module
-        app_module._gspread_worksheets.clear()
-        # Forzar re-apertura del spreadsheet en la próxima llamada
-        app_module._gspread_spreadsheet = None
+    _sheets_cache_df = None
+    _sheets_cache_time = 0.0
 
 
 def read_sheets_df():
@@ -227,9 +212,8 @@ def read_sheets_df():
 
     COLS = app_module.COLUMNS  # 27 columnas oficiales
     try:
-        with _gspread_lock:
-            # get_all_monthly_worksheets() usa spreadsheet.worksheets() — 1 sola llamada API
-            all_worksheets = app_module.get_all_monthly_worksheets()
+        # get_all_monthly_worksheets() usa spreadsheet.worksheets() — 1 sola llamada API
+        all_worksheets = app_module.get_all_monthly_worksheets()
 
         all_dfs = []
         for ws in all_worksheets:
@@ -258,6 +242,7 @@ def read_sheets_df():
             return _sheets_cache_df
 
         consolidated_df = pd.concat(all_dfs, ignore_index=True)
+        # Guardar en cache con timestamp
         _sheets_cache_df = consolidated_df
         _sheets_cache_time = time.time()
         return consolidated_df
@@ -341,47 +326,7 @@ async def get_months():
         return {"months": [{"mes": m, "has_data": False} for m in ALL_MONTHS], "error": str(e)}
 
 
-@fastapi_app.patch("/api/invoices/update-status")
-async def update_invoice_status(body: dict):
-    """Actualiza el estado de una factura directamente desde el dashboard.
-
-    Body esperado:
-    {
-      "numero_factura": "FE-0001",
-      "estado": "PAGADA",           // PAGADA | PENDIENTE | VENCIDA
-      "valor_pagado": 1500000.0,    // opcional
-      "fecha_pago": "15/03/2026",   // opcional, default: hoy si estado=PAGADA
-      "observaciones": "Pagado PSE" // opcional, se agrega al texto existente
-    }
-    """
-    numero   = body.get("numero_factura", "").strip()
-    estado   = body.get("estado", "").strip().upper()
-    vpagado  = body.get("valor_pagado")
-    fpago    = body.get("fecha_pago")
-    obs      = body.get("observaciones")
-
-    if not numero:
-        return {"ok": False, "error": "numero_factura es requerido"}
-    if estado not in ("PENDIENTE", "PAGADA", "VENCIDA"):
-        return {"ok": False, "error": "estado debe ser PENDIENTE, PAGADA o VENCIDA"}
-
-    result = app_module.update_invoice_status(
-        numero_factura=numero,
-        nuevo_estado=estado,
-        valor_pagado=float(vpagado) if vpagado is not None else None,
-        fecha_pago=fpago,
-        observaciones=obs,
-    )
-
-    if result.get("ok"):
-        invalidate_sheets_cache()
-        log_store.add_log(
-            f"✅ Factura {numero} → {estado}" +
-            (f" | Pagado: ${float(vpagado):,.0f}" if vpagado else ""),
-            "success"
-        )
-
-    return result
+@fastapi_app.get("/api/invoices/by-status/{status}")
 async def get_invoices_by_status(status: str):
     try:
         df = read_sheets_df()
@@ -483,7 +428,6 @@ async def get_status():
         "timestamp":      datetime.now().isoformat(),
         "logs_totales":   len(log_store.get_logs()),
         "modelo":         app_module.CLAUDE_MODEL,
-        "version":        "5.1.0",
     }
 
 
@@ -502,12 +446,6 @@ async def set_scheduler(config: dict):
     estado = "activado" if scheduler_state["enabled"] else "desactivado"
     log_store.add_log(f"Scheduler {estado}", "success" if scheduler_state["enabled"] else "warning")
     return {**scheduler_state}
-
-
-@fastapi_app.delete("/api/chat/{session_id}")
-async def clear_chat_session(session_id: str):
-    """El chat es stateless en el servidor — solo confirma el reset al cliente."""
-    return {"status": "ok", "session_id": session_id}
 
 
 @fastapi_app.post("/api/chat")
@@ -545,62 +483,14 @@ async def chat_with_claude(message: dict):
         if year_match:
             intent_year = int(year_match.group(1))
 
-        # ── Detectar intent: cambiar estado de factura ────────────────────
-        # Patrones: "marca FE-001 como pagada", "cambia FE-001 a vencida",
-        #           "la factura FACT-123 está pagada", "pon FE-001 pagada"
-        status_intent = None
-        status_numero = None
-        status_estado = None
-
-        _estado_kw = {
-            "pagada":    ["pagada", "pagado", "cancelada", "cancelado", "ya pagué", "ya pague"],
-            "vencida":   ["vencida", "vencido", "venció", "vencio", "expirada", "expirado"],
-            "pendiente": ["pendiente", "sin pagar", "por pagar"],
-        }
-        _status_verbs = [
-            "marca", "marcar", "cambia", "cambiar", "actualiza", "actualizar",
-            "pon", "poner", "registra", "registrar", "pasa", "pasar", "setea",
-        ]
-
-        has_status_verb = any(v in lower_msg for v in _status_verbs)
-        # Buscar número de factura en el mensaje (ej: FE-001, FACT-123, FV0045, etc.)
-        num_match = _re.search(
-            r'\b(fe[-\s]?\d+|fv[-\s]?\d+|fes[-\s]?\d+|fact[-\s]?\d+|fac[-\s]?\d+|'
-            r'[a-z]{2,5}[-\s]?\d{3,})\b',
-            lower_msg, _re.IGNORECASE
-        )
-
-        if has_status_verb and num_match:
-            # Normalizar el número encontrado
-            raw_num = num_match.group(0).upper().replace(" ", "-")
-            for estado_norm, keywords in _estado_kw.items():
-                if any(kw in lower_msg for kw in keywords):
-                    status_numero = raw_num
-                    status_estado = estado_norm.upper()
-                    status_intent = "update_status"
-                    break
-
-        # ── Ejecutar update_status ANTES de responder con Claude ─────────
-        update_result = None
-        if status_intent == "update_status" and status_numero and status_estado:
-            update_result = app_module.update_invoice_status(
-                numero_factura=status_numero,
-                nuevo_estado=status_estado,
-            )
-            if update_result.get("ok"):
-                invalidate_sheets_cache()
-                log_store.add_log(
-                    f"💬 Chat: {status_numero} → {status_estado}",
-                    "success"
-                )
-
-        # ── Palabras que implican ACCIÓN (procesar correos) ───────────────
+        # Palabras que implican ACCIÓN (procesar correos)
         action_kw = [
             "procesar", "procesa", "registra", "registrar", "cargar", "carga",
             "guardar", "guarda", "subir", "sube", "agregar", "agrega",
             "extraer", "extrae", "buscar correos", "busca correos",
             "trae", "traer", "pasar", "pasa", "junta",
         ]
+        # Palabras que implican CONSULTA (solo ver datos)
         query_kw = [
             "qué facturas", "que facturas", "cuántas", "cuantas",
             "listar", "lista", "ver", "mostrar", "muestra",
@@ -609,17 +499,16 @@ async def chat_with_claude(message: dict):
         ]
 
         is_action = any(kw in lower_msg for kw in action_kw)
+        is_query  = any(kw in lower_msg for kw in query_kw)
 
-        if status_intent == "update_status":
-            intent = "update_status"
-        elif is_action and intent_mes:
+        if is_action and intent_mes:
             intent = "process_month"
-        elif is_action:
+        elif is_action and not intent_mes:
             intent = "process_emails"
         else:
-            intent = None
+            intent = None  # Solo consulta, no ejecutar nada
 
-        # ── Contexto de datos para Claude ────────────────────────────────
+        # ── Cargar resumen de datos de Sheets para dar contexto a Claude ──
         data_context = ""
         try:
             import pandas as pd
@@ -650,33 +539,17 @@ async def chat_with_claude(message: dict):
         except Exception:
             pass
 
-        # Construir contexto del resultado del update para que Claude responda bien
-        update_context = ""
-        if update_result:
-            if update_result.get("ok"):
-                update_context = (
-                    f"\n\nACCIÓN EJECUTADA: La factura {status_numero} fue marcada como "
-                    f"{status_estado} exitosamente en la hoja '{update_result.get('mes')}', "
-                    f"fila {update_result.get('fila')}."
-                )
-            else:
-                update_context = (
-                    f"\n\nACCIÓN FALLIDA: No se pudo cambiar el estado de {status_numero}. "
-                    f"Motivo: {update_result.get('error', 'desconocido')}."
-                )
-
         system_prompt = f"""Eres el asistente del sistema Invoice Agent de KiitchenLab. Respondes SIEMPRE en español colombiano, de forma directa y concisa.
 
 NORMAS:
 - Máximo 3 oraciones. Sin bloques de código. Sin jerga técnica.
-- Si el usuario pide procesar/registrar un mes → confirma brevemente que se iniciará el procesamiento.
+- Si el usuario pide procesar/registrar un mes → confirma brevemente que se iniciará el procesamiento de ese mes.
 - Si el usuario pide procesar correos (sin mes) → confirma que se procesarán los correos actuales.
 - Si el usuario hace una consulta de datos → usa los datos reales a continuación para responder.
-- Si se ejecutó una acción de cambio de estado → confirma el resultado usando el contexto de ACCIÓN EJECUTADA.
-- Si la acción falló → explica brevemente el error.
+- Si el usuario menciona un problema que ocurrió → explica brevemente qué pasó y qué se puede hacer.
 - NO digas "no tengo acceso" si los datos están disponibles abajo.
 
-{data_context if data_context else "No hay facturas registradas aún en el sistema."}{update_context}"""
+{data_context if data_context else "No hay facturas registradas aún en el sistema."}"""
 
         response = client.messages.create(
             model=CLAUDE_CHAT_MODEL,
@@ -688,12 +561,11 @@ NORMAS:
         assistant_response = response.content[0].text if response.content else ""
 
         return {
-            "response":       assistant_response,
-            "intent":         intent,
-            "mes":            intent_mes,
-            "year":           intent_year,
-            "update_result":  update_result,
-            "timestamp":      datetime.now().isoformat()
+            "response":  assistant_response,
+            "intent":    intent,
+            "mes":       intent_mes,
+            "year":      intent_year,
+            "timestamp": datetime.now().isoformat()
         }
 
     except Exception as e:
