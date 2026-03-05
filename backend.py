@@ -1,10 +1,4 @@
- (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend.py b/backend.py
-index 84dcff747731b7b7232612407ba9819bc3f91f1f..5ee22c15cf66cc812ae63c2e87666dab98ea8d00 100644
---- a/backend.py
-+++ b/backend.py
-@@ -1,50 +1,50 @@
- """
+"""
  FastAPI Backend — Invoice Agent
  Servidor único. app.py es el módulo de procesamiento de correos.
  
