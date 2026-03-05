@@ -19,7 +19,7 @@ import asyncio, threading, json, os, schedule, time
 from datetime import datetime
 from typing import List, Dict, Optional
 
-fastapi_app = FastAPI(title="Invoice Agent API", version="5.0.0")
+fastapi_app = FastAPI(title="Invoice Agent API", version="5.1.0")
 fastapi_app.add_middleware(
     CORSMiddleware, allow_origins=["*"],
     allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
@@ -27,7 +27,6 @@ fastapi_app.add_middleware(
 
 # ── MODELO CHAT ───────────────────────────────────────────────────────────────
 # claude-sonnet-4-6: mismo modelo que usa app.py para consistencia
-# Garantiza que el chat del dashboard use el mismo nivel de inteligencia
 CLAUDE_CHAT_MODEL = "claude-sonnet-4-6"
 
 # ── LOG STORE ─────────────────────────────────────────────────────────────────
@@ -68,6 +67,11 @@ scheduler_state = {
 }
 _scheduler_thread: Optional[threading.Thread] = None
 _scheduler_stop = threading.Event()
+
+# ── LOCK GLOBAL PARA GSPREAD ──────────────────────────────────────────────────
+# Protege las variables globales de gspread en app_module contra race conditions
+# cuando el scheduler y el proceso manual se ejecutan casi simultáneamente.
+_gspread_lock = threading.Lock()
 
 
 # ── PROCESO PRINCIPAL ──────────────────────────────────────────────────────────
@@ -195,10 +199,21 @@ _SHEETS_CACHE_TTL = 90  # segundos
 
 
 def invalidate_sheets_cache():
-    """Invalida el cache para forzar recarga en la proxima llamada."""
+    """Invalida el cache de DataFrames Y el cache de worksheets de gspread.
+
+    CRÍTICO: también limpia _gspread_worksheets y _gspread_spreadsheet en
+    app_module. Sin esto, si se crea una hoja nueva durante la sesión (cambio
+    de mes) el agente seguiría usando la referencia vieja y los datos nuevos
+    no se verían en el dashboard hasta reiniciar el servidor.
+    """
     global _sheets_cache_df, _sheets_cache_time
-    _sheets_cache_df = None
-    _sheets_cache_time = 0.0
+    with _gspread_lock:
+        _sheets_cache_df = None
+        _sheets_cache_time = 0.0
+        # Limpiar cache de worksheets en app_module
+        app_module._gspread_worksheets.clear()
+        # Forzar re-apertura del spreadsheet en la próxima llamada
+        app_module._gspread_spreadsheet = None
 
 
 def read_sheets_df():
@@ -212,8 +227,9 @@ def read_sheets_df():
 
     COLS = app_module.COLUMNS  # 27 columnas oficiales
     try:
-        # get_all_monthly_worksheets() usa spreadsheet.worksheets() — 1 sola llamada API
-        all_worksheets = app_module.get_all_monthly_worksheets()
+        with _gspread_lock:
+            # get_all_monthly_worksheets() usa spreadsheet.worksheets() — 1 sola llamada API
+            all_worksheets = app_module.get_all_monthly_worksheets()
 
         all_dfs = []
         for ws in all_worksheets:
@@ -242,7 +258,6 @@ def read_sheets_df():
             return _sheets_cache_df
 
         consolidated_df = pd.concat(all_dfs, ignore_index=True)
-        # Guardar en cache con timestamp
         _sheets_cache_df = consolidated_df
         _sheets_cache_time = time.time()
         return consolidated_df
@@ -428,7 +443,7 @@ async def get_status():
         "timestamp":      datetime.now().isoformat(),
         "logs_totales":   len(log_store.get_logs()),
         "modelo":         app_module.CLAUDE_MODEL,
-        "version":        "5.0.0",
+        "version":        "5.1.0",
     }
 
 
@@ -506,7 +521,7 @@ async def chat_with_claude(message: dict):
         ]
 
         is_action = any(kw in lower_msg for kw in action_kw)
-        is_query  = any(kw in lower_msg for kw in query_kw)
+        is_query  = any(kw in lower_msg for kw in query_kw)  # noqa: F841 — útil para futuras reglas
 
         if is_action and intent_mes:
             intent = "process_month"
