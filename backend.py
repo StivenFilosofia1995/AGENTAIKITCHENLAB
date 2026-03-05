@@ -428,6 +428,7 @@ async def get_status():
         "timestamp":      datetime.now().isoformat(),
         "logs_totales":   len(log_store.get_logs()),
         "modelo":         app_module.CLAUDE_MODEL,
+        "version":        "5.0.0",
     }
 
 
@@ -446,6 +447,12 @@ async def set_scheduler(config: dict):
     estado = "activado" if scheduler_state["enabled"] else "desactivado"
     log_store.add_log(f"Scheduler {estado}", "success" if scheduler_state["enabled"] else "warning")
     return {**scheduler_state}
+
+
+@fastapi_app.delete("/api/chat/{session_id}")
+async def clear_chat_session(session_id: str):
+    """El chat es stateless en el servidor — solo confirma el reset al cliente."""
+    return {"status": "ok", "session_id": session_id}
 
 
 @fastapi_app.post("/api/chat")
