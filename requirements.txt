@@ -16,13 +16,14 @@ gspread>=6.0.0
 google-auth>=2.0.0
 
 # ── Data Handling ────────────────────────────────────────────
-pandas>=2.1.0
-openpyxl>=3.1.0
+pandas==2.1.4
+openpyxl==3.1.5
 
 # ── Email & Document Parsing ─────────────────────────────────
-PyPDF2>=3.0.0
-python-docx>=1.0.0
-beautifulsoup4>=4.12.0
+PyPDF2==3.0.1
+pdfplumber>=0.10.0
+python-docx==1.2.0
+beautifulsoup4==4.14.3
 
 # ── Utilities ────────────────────────────────────────────────
-requests>=2.32.0
+requests==2.32.5
