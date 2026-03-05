@@ -119,10 +119,12 @@ thead th{padding:10px 14px;text-align:left;font-size:11px;font-weight:600;letter
 tbody tr{border-bottom:1px solid var(--line2);transition:background .12s;}
 tbody tr:hover{background:var(--paper2);}
 tbody td{padding:9px 14px;color:var(--ink2);font-size:12px;white-space:nowrap;}
-
-/* BADGES (reservado) */
+.badge{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:100px;font-size:11px;font-weight:600;}
 .bd{width:6px;height:6px;border-radius:50%;background:currentColor;}
-
+.bpend{background:var(--amb-bg);color:var(--amb);border:1px solid var(--amb-mid);}
+.bpag{background:var(--em-bg);color:var(--em);border:1px solid var(--em-mid);}
+.bvenc{background:var(--red-bg);color:var(--red);border:1px solid var(--red-mid);}
+.bdef{background:var(--paper2);color:var(--ink3);border:1px solid var(--line);}
 .empty-t{padding:56px 20px;text-align:center;}
 .empty-t .ei{font-size:40px;opacity:.22;margin-bottom:12px;}
 .empty-t p{font-size:13px;color:var(--ink4);}
@@ -147,12 +149,6 @@ canvas#donut{display:block;margin:0 auto;max-width:150px;}
 .qb.qe:hover{background:var(--em-bg);}
 .qi{font-size:15px;}
 
-/* ── TOAST ─────────────────────────────────────────────────────────── */
-.toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--ink);color:#fff;padding:11px 22px;border-radius:100px;font-size:13px;font-weight:600;z-index:600;opacity:0;transition:all .3s;pointer-events:none;white-space:nowrap;}
-.toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
-.toast.ok{background:var(--em);}
-.toast.err{background:var(--red);}
-
 /* AUTOMATIZACIÓN */
 .pa{padding:32px 28px 60px;max-width:960px;margin:0 auto;}
 .sh{margin-bottom:28px;}
@@ -163,6 +159,7 @@ canvas#donut{display:block;margin:0 auto;max-width:150px;}
 .ac{background:var(--white);border:1px solid var(--line);border-radius:var(--r2);box-shadow:var(--sh);padding:24px;}
 .act{font-size:15px;font-weight:700;margin-bottom:4px;}
 .acs{font-size:13px;color:var(--ink3);margin-bottom:22px;line-height:1.5;}
+
 .trow{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;}
 .tlab{font-size:14px;font-weight:600;}
 .tsub{font-size:12px;color:var(--ink3);margin-top:2px;}
@@ -172,6 +169,7 @@ canvas#donut{display:block;margin:0 auto;max-width:150px;}
 .tog input:checked + .ttr{background:var(--em-mid);border-color:var(--em);}
 .tth{position:absolute;top:3px;left:3px;width:16px;height:16px;background:var(--ink4);border-radius:50%;transition:all .3s;}
 .tog input:checked + .ttr + .tth{transform:translateX(20px);background:var(--em);box-shadow:0 0 8px rgba(5,150,105,.4);}
+
 .fq{font-size:13px;font-weight:600;color:var(--ink2);margin-bottom:12px;}
 .fl{display:flex;flex-direction:column;gap:8px;margin-bottom:20px;}
 .fi{display:flex;align-items:center;gap:12px;padding:13px 15px;border:1.5px solid var(--line);border-radius:var(--r);cursor:pointer;transition:all .15s;background:var(--paper2);}
@@ -184,6 +182,7 @@ canvas#donut{display:block;margin:0 auto;max-width:150px;}
 .fck{width:17px;height:17px;border-radius:50%;border:2px solid var(--ink4);display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .2s;}
 .fi.sel .fck{border-color:var(--em);background:var(--em);}
 .fi.sel .fck::after{content:'✓';color:#fff;font-size:10px;font-weight:700;}
+
 .tf{display:none;margin-bottom:18px;}
 .tf.show{display:block;}
 .fl2{font-size:12px;font-weight:600;color:var(--ink3);margin-bottom:6px;display:block;text-transform:uppercase;letter-spacing:.05em;}
@@ -192,12 +191,14 @@ canvas#donut{display:block;margin:0 auto;max-width:150px;}
 .fi2[type=time]{width:140px;}
 .fi2[type=number]{width:110px;}
 select.fi2{width:100%;cursor:pointer;}
+
 .sbox{margin-top:16px;padding:14px 16px;background:var(--paper2);border:1px solid var(--line);border-radius:var(--r);display:flex;flex-direction:column;gap:8px;}
 .sr{display:flex;justify-content:space-between;font-size:12px;}
 .sk{color:var(--ink4);}
 .sv{font-weight:600;color:var(--ink2);}
 .sv.on{color:var(--em);}
 .sv.nx{color:var(--blu);}
+
 .pf2{display:grid;grid-template-columns:1fr auto;gap:10px;margin-bottom:16px;align-items:end;}
 .ph{font-size:12px;color:var(--ink4);line-height:1.6;padding:12px 14px;background:var(--blu-bg);border-radius:var(--r);border:1px solid #bfdbfe;margin-top:14px;}
 .plive{margin-top:16px;padding:14px 16px;background:var(--paper2);border:1px solid var(--line);border-radius:var(--r);}
@@ -262,6 +263,8 @@ select.fi2{width:100%;cursor:pointer;}
 .cinp:focus{border-color:var(--em);background:var(--white);}
 .bsend{padding:9px 16px;background:var(--ink);border:none;border-radius:var(--r);color:#fff;font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer;transition:background .15s;white-space:nowrap;}
 .bsend:hover{background:var(--ink2);}.bsend:disabled{opacity:.4;cursor:not-allowed;}
+
+hr.sep{border:none;border-top:1px solid var(--line);margin:20px 0;}
 </style>
 </head>
 <body>
@@ -281,7 +284,7 @@ select.fi2{width:100%;cursor:pointer;}
     <div class="ws-pill" id="wsp"><div class="dot"></div><span id="wst">Offline</span></div>
     <button class="btn btn-g" onclick="exportExcel()">📄 Excel</button>
     <div style="display:flex;align-items:center;gap:6px;">
-      <select id="nav-mes" class="fi2" style="font-size:12px;padding:6px 8px;height:36px;border-radius:8px;border:1.5px solid var(--line);font-family:var(--font);background:var(--white);color:var(--ink);cursor:pointer;">
+      <select id="nav-mes" class="fi2" style="font-size:12px;padding:6px 8px;height:36px;border-radius:8px;border:1.5px solid var(--line);font-family:var(--font);background:var(--white);color:var(--ink);cursor:pointer;" title="Mes a procesar">
         <option value="enero">Ene</option><option value="febrero">Feb</option>
         <option value="marzo">Mar</option><option value="abril">Abr</option>
         <option value="mayo">May</option><option value="junio">Jun</option>
@@ -324,24 +327,27 @@ select.fi2{width:100%;cursor:pointer;}
 
   <!-- FACTURAS -->
   <div class="page pf on" id="page-f">
-    <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr)">
-      <div class="kpi"><div class="kpi-lbl">Total facturas</div><div class="kpi-v ce" id="st">—</div><div class="kpi-s">registradas</div></div>
-      <div class="kpi"><div class="kpi-lbl">COP</div><div class="kpi-v cs" id="sc" style="font-size:22px">—</div><div class="kpi-s">pesos colombianos</div></div>
-      <div class="kpi"><div class="kpi-lbl">USD</div><div class="kpi-v cb" id="su" style="font-size:22px">—</div><div class="kpi-s">dólares</div></div>
+    <div class="kpi-grid">
+      <div class="kpi"><div class="kpi-lbl">Total</div><div class="kpi-v ce" id="st">—</div><div class="kpi-s">facturas</div></div>
+      <div class="kpi"><div class="kpi-lbl">Pendientes</div><div class="kpi-v ca" id="sp">—</div><div class="kpi-s">por pagar</div></div>
+      <div class="kpi"><div class="kpi-lbl">Pagadas</div><div class="kpi-v ce" id="sg">—</div><div class="kpi-s">completadas</div></div>
+      <div class="kpi"><div class="kpi-lbl">Vencidas</div><div class="kpi-v cr" id="sv">—</div><div class="kpi-s">atención</div></div>
+      <div class="kpi"><div class="kpi-lbl">COP</div><div class="kpi-v cs" id="sc" style="font-size:19px">—</div><div class="kpi-s">pesos</div></div>
+      <div class="kpi"><div class="kpi-lbl">USD</div><div class="kpi-v cb" id="su" style="font-size:19px">—</div><div class="kpi-s">dólares</div></div>
     </div>
     <div class="flay">
       <div class="card">
-        <div class="card-h">
-          <span class="card-t">Registro de Facturas</span>
-          <span class="card-m" id="tcnt" style="display:flex;align-items:center;gap:8px;">
-            <span id="tcnt-txt"></span>
-            <span style="font-size:11px;color:var(--ink4);">Clic en el estado para editarlo ✎</span>
-          </span>
-        </div>
+        <div class="card-h"><span class="card-t">Registro de Facturas</span><span class="card-m" id="tcnt"></span></div>
         <div class="fbar">
           <div class="srch">
             <span class="srch-ic">🔍</span>
             <input type="text" id="si" placeholder="Buscar por proveedor, número, NIT..." oninput="applyF()"/>
+          </div>
+          <div class="chips">
+            <button class="ch c-all" id="ca" onclick="setSt('all')">Todas</button>
+            <button class="ch" id="cp" onclick="setSt('PENDIENTE')">🟡 Pendientes</button>
+            <button class="ch" id="cg" onclick="setSt('PAGADA')">🟢 Pagadas</button>
+            <button class="ch" id="cv" onclick="setSt('VENCIDA')">🔴 Vencidas</button>
           </div>
         </div>
         <div class="mrow" id="mrow"><button class="mc on" onclick="setM(null,this)">Todos</button></div>
@@ -357,6 +363,9 @@ select.fi2{width:100%;cursor:pointer;}
         </div>
         <div class="qcard">
           <div class="qtit">Acciones rápidas</div>
+          <button class="qb" onclick="setSt('VENCIDA')"><span class="qi">🔴</span> Ver vencidas</button>
+          <button class="qb" onclick="setSt('PENDIENTE')"><span class="qi">🟡</span> Ver pendientes</button>
+          <button class="qb" onclick="setSt('all')"><span class="qi">📋</span> Ver todas</button>
           <button class="qb qe" onclick="exportExcel()"><span class="qi">📄</span> Exportar Excel</button>
         </div>
       </div>
@@ -441,9 +450,6 @@ select.fi2{width:100%;cursor:pointer;}
 
 </div>
 
-<!-- TOAST -->
-<div class="toast" id="toast"></div>
-
 <button class="cfab" id="cfab" onclick="toggleC()">🤖</button>
 <div class="cwin" id="cwin">
   <div class="chd">
@@ -473,54 +479,32 @@ const nts=()=>new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-di
 const fN=(n,d=0)=>n==null?'—':new Intl.NumberFormat('es-CO',{minimumFractionDigits:d,maximumFractionDigits:d}).format(n);
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
-let rows=[],aMes=null,proc=false,selMode='interval',selMin=15;
+let rows=[],aMes=null,sf='all',proc=false,selMode='interval',selMin=15;
 let ws=null,reN=0,reTmr=null,wsFail=0,hpoll=null,lCnt=0;
 
 function goPage(n,el){document.querySelectorAll('.ntab').forEach(t=>t.classList.remove('on'));if(el)el.classList.add('on');document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));document.getElementById('page-'+n).classList.add('on');}
 
-// ── STATS ─────────────────────────────────────────────────────────────────────
-async function loadStats(){try{const u=aMes?`${BASE}/api/stats?mes=${aMes}`:`${BASE}/api/stats`;const r=await fetch(u);if(!r.ok)return;const d=await r.json();document.getElementById('st').textContent=d.total??'0';document.getElementById('sc').textContent='$'+fN(d.total_cop);document.getElementById('su').textContent='$'+fN(d.total_usd,2);document.getElementById('upd').textContent='Actualizado '+nts()+(aMes?' · '+cap(aMes):'');}catch{}}
+async function loadStats(){try{const u=aMes?`${BASE}/api/stats?mes=${aMes}`:`${BASE}/api/stats`;const r=await fetch(u);if(!r.ok)return;const d=await r.json();document.getElementById('st').textContent=d.total??'0';document.getElementById('sp').textContent=d.pendientes??'0';document.getElementById('sg').textContent=d.pagadas??'0';document.getElementById('sv').textContent=d.vencidas??'0';document.getElementById('sc').textContent='$'+fN(d.total_cop);document.getElementById('su').textContent='$'+fN(d.total_usd,2);document.getElementById('upd').textContent='Actualizado '+nts()+(aMes?' · '+cap(aMes):'');drawD(d.pendientes||0,d.pagadas||0,d.vencidas||0);}catch{}}
 
+function drawD(pnd,pg,vc){const cv=document.getElementById('donut'),ctx=cv.getContext('2d'),tot=pnd+pg+vc;ctx.clearRect(0,0,150,150);const cx=75,cy=75,ro=62,ri=44;if(!tot){ctx.beginPath();ctx.arc(cx,cy,ro,0,Math.PI*2);ctx.strokeStyle='#e2e8f0';ctx.lineWidth=ro-ri;ctx.stroke();document.getElementById('leg').innerHTML='<div style="color:#94a3b8;font-size:12px;text-align:center;">Sin datos</div>';return;}const segs=[{v:pnd,c:'#d97706',l:'Pendientes'},{v:pg,c:'#059669',l:'Pagadas'},{v:vc,c:'#dc2626',l:'Vencidas'}].filter(s=>s.v>0);let st=-Math.PI/2;segs.forEach(s=>{const a=(s.v/tot)*Math.PI*2;ctx.beginPath();ctx.arc(cx,cy,(ro+ri)/2,st,st+a);ctx.strokeStyle=s.c;ctx.lineWidth=ro-ri-2;ctx.lineCap='butt';ctx.stroke();st+=a;});ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(cx,cy,ri-1,0,Math.PI*2);ctx.fill();ctx.fillStyle='#0e1117';ctx.font='bold 20px Plus Jakarta Sans,sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(tot,cx,cy-6);ctx.fillStyle='#94a3b8';ctx.font='11px Plus Jakarta Sans,sans-serif';ctx.fillText('facturas',cx,cy+10);document.getElementById('leg').innerHTML=segs.map(s=>`<div class="li"><div class="ld" style="background:${s.c}"></div><span class="ll">${s.l}</span><span class="lp">${Math.round(s.v/tot*100)}%</span><span class="lv">${s.v}</span></div>`).join('');}
+
+async function loadMonths(){try{const r=await fetch(`${BASE}/api/months`);if(!r.ok)return;const d=await r.json();if(!d.months)return;const row=document.getElementById('mrow');row.innerHTML=`<button class="mc ${aMes===null?'on':''}" onclick="setM(null,this)">Todos</button>`+d.months.map(({mes,has_data})=>`<button class="mc${has_data?'':' emp'}${aMes===mes?' on':''}" ${has_data?`onclick="setM('${mes}',this)"`:''} >${cap(mes)}</button>`).join('');}catch{}}
 function setM(m,btn){aMes=m;document.querySelectorAll('.mc').forEach(b=>b.classList.remove('on'));if(btn)btn.classList.add('on');loadStats();loadInvoices();}
 
-function applyF(){const q=(document.getElementById('si').value||'').toLowerCase();const fr=rows.filter(r=>!q||Object.values(r).some(v=>String(v).toLowerCase().includes(q)));renderR(fr);}
+function setSt(f){sf=f;['ca','cp','cg','cv'].forEach(id=>{document.getElementById(id).className='ch';});const map={all:'ca',PENDIENTE:'cp',PAGADA:'cg',VENCIDA:'cv'},cls={all:'c-all',PENDIENTE:'c-pend',PAGADA:'c-pag',VENCIDA:'c-venc'};document.getElementById(map[f]||'ca').classList.add(cls[f]||'c-all');applyF();}
+function applyF(){const q=(document.getElementById('si').value||'').toLowerCase();const fr=rows.filter(r=>{const ms=sf==='all'||(r['Estado']||'').toUpperCase()===sf;const mq=!q||Object.values(r).some(v=>String(v).toLowerCase().includes(q));return ms&&mq;});renderR(fr);}
 
 async function loadInvoices(){try{const u=aMes?`${BASE}/api/invoices?limit=2000&mes=${aMes}`:`${BASE}/api/invoices?limit=2000`;const r=await fetch(u);if(!r.ok)return;const d=await r.json();rows=d.invoices||[];applyF();}catch{renderR([]);}}
 
-const HIDDEN_COLS=new Set(['Estado','Valor Pagado','Valor Por Pagar','Fecha Pago']);
-const NC=new Set(['Subtotal','Descuento','IVA','Rete IVA','Rete ICA','Impto Consumo','Propina','Otros Impuestos','Retención en la fuente','Administración','Utilidad','Imprevistos','Valor Total']);
+const NC=new Set(['Subtotal','Descuento','IVA','Rete IVA','Rete ICA','Impto Consumo','Propina','Otros Impuestos','Retención en la fuente','Administración','Utilidad','Imprevistos','Valor Total','Valor Pagado','Valor Por Pagar']);
 function pN(v){if(!v||v==='N/A'||v==='')return null;const n=parseFloat(String(v).trim().replace(/\./g,'').replace(',','.'));return isNaN(n)?null:n;}
 
-function renderR(rs){
-  const tb=document.getElementById('tb'),th=document.getElementById('th');
-  document.getElementById('tcnt-txt').textContent=`${rs.length} resultado${rs.length!==1?'s':''}`;
-  if(!rs.length){th.innerHTML='';const q=document.getElementById('si').value;tb.innerHTML=`<tr><td colspan="20"><div class="empty-t"><div class="ei">${q?'🔎':'🧾'}</div><p>${q?'Sin resultados para este filtro':'Sin facturas aún'}</p>${!q?'<p class="ht">Pulsa <strong>▶ Procesar</strong> para que el agente busque facturas en tu correo</p>':''}</div></td></tr>`;return;}
-  const allCols=Object.keys(rs[0]);
-  const cols=allCols.filter(c=>!HIDDEN_COLS.has(c));
-  th.innerHTML=cols.map(c=>`<th>${esc(c)}</th>`).join('');
-  const cell=(c,v)=>{
-    const s=v==null?'N/A':String(v);
-    if(c==='Número Factura')return`<td style="color:var(--em);font-weight:700">${esc(s)}</td>`;
-    if(c==='Proveedor'||c==='Nombre Proveedor')return`<td style="font-weight:600;color:var(--ink)">${esc(s)}</td>`;
-    if(c==='Mes')return`<td style="color:var(--ink4);font-size:11px">${esc(s)}</td>`;
-    if(NC.has(c)){const n=pN(s);if(n&&n!==0){const x=c==='Valor Total'?'color:var(--em);font-weight:700':c.startsWith('Rete')||c==='IVA'?'color:var(--amb)':'color:var(--ink2);font-weight:500';return`<td style="${x}">${fN(n)}</td>`;}return`<td style="color:var(--ink4)">—</td>`;}
-    return`<td>${esc(s)}</td>`;
-  };
-  tb.innerHTML=rs.map(r=>`<tr>${cols.map(c=>cell(c,r[c])).join('')}</tr>`).join('');
-}
+function renderR(rs){const tb=document.getElementById('tb'),th=document.getElementById('th');document.getElementById('tcnt').textContent=`${rs.length} resultado${rs.length!==1?'s':''}`;if(!rs.length){th.innerHTML='';const q=document.getElementById('si').value;tb.innerHTML=`<tr><td colspan="27"><div class="empty-t"><div class="ei">${q||sf!=='all'?'🔎':'🧾'}</div><p>${q||sf!=='all'?'Sin resultados para este filtro':'Sin facturas aún'}</p>${!q&&sf==='all'?'<p class="ht">Pulsa <strong>▶ Procesar</strong> para que el agente busque facturas en tu correo</p>':''}</div></td></tr>`;return;}const cols=Object.keys(rs[0]);th.innerHTML=cols.map(c=>`<th>${esc(c)}</th>`).join('');const badge=s=>{const u=(s||'').toString().toUpperCase();const[cl,lb]=u==='PENDIENTE'?['bpend','Pendiente']:u==='PAGADA'?['bpag','Pagada']:u==='VENCIDA'?['bvenc','Vencida']:['bdef',u||'N/A'];return`<span class="badge ${cl}"><span class="bd"></span>${lb}</span>`;};const cell=(c,v)=>{const s=v==null?'N/A':String(v);if(c==='Estado')return`<td>${badge(s)}</td>`;if(c==='Número Factura')return`<td style="color:var(--em);font-weight:700">${esc(s)}</td>`;if(c==='Proveedor'||c==='Nombre Proveedor')return`<td style="font-weight:600;color:var(--ink)">${esc(s)}</td>`;if(c==='Mes')return`<td style="color:var(--ink4);font-size:11px">${esc(s)}</td>`;if(NC.has(c)){const n=pN(s);if(n&&n!==0){const x=c==='Valor Total'?'color:var(--em);font-weight:700':c.startsWith('Rete')||c==='IVA'?'color:var(--amb)':'color:var(--ink2);font-weight:500';return`<td style="${x}">${fN(n)}</td>`;}return`<td style="color:var(--ink4)">—</td>`;}return`<td>${esc(s)}</td>`;};tb.innerHTML=rs.map(r=>`<tr>${cols.map(c=>cell(c,r[c])).join('')}</tr>`).join('');}
 
-// ── TOAST ─────────────────────────────────────────────────────────────────────
-let toastTmr = null;
-function showToast(msg, tipo='ok'){
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.className = `toast ${tipo} show`;
-  if(toastTmr) clearTimeout(toastTmr);
-  toastTmr = setTimeout(()=>{ t.classList.remove('show'); }, 3500);
-}
-
-// ── PROCESO ───────────────────────────────────────────────────────────────────
-async function triggerProc(){if(proc)return;const mes=document.getElementById('nav-mes').value,year=parseInt(document.getElementById('nav-yr').value)||new Date().getFullYear();setP(true,`Procesando ${cap(mes)} ${year}...`);try{const r=await fetch(`${BASE}/api/process-month`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mes,year})});const d=await r.json();if(d.status==='ya_ejecutando'){log(d.message,'warning');setP(false);return;}log(`🚀 Procesando ${cap(mes)} ${year}`,'success');setTimeout(()=>{loadStats();loadInvoices();},15000);setTimeout(()=>{loadStats();loadInvoices();},45000);setTimeout(()=>{setP(false);loadStats();loadInvoices();loadMonths();},180000);}catch(e){log(`Error: ${e.message}`,'error');setP(false);}}
+async function triggerProc(){if(proc)return;const mes=document.getElementById('nav-mes').value,year=parseInt(document.getElementById('nav-yr').value)||new Date().getFullYear();setP(true,`Procesando ${cap(mes)} ${year}...`);try{const r=await fetch(`${BASE}/api/process-month`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mes,year})});const d=await r.json();if(d.status==='ya_ejecutando'){log(d.message,'warning');setP(false);return;}log(`🚀 Procesando ${cap(mes)} ${year}`,'success');// Refrescos progresivos mientras corre el proceso
+setTimeout(()=>{loadStats();loadInvoices();},15000);
+setTimeout(()=>{loadStats();loadInvoices();},45000);
+setTimeout(()=>{setP(false);loadStats();loadInvoices();loadMonths();},180000);}catch(e){log(`Error: ${e.message}`,'error');setP(false);}}
 
 async function triggerM(){if(proc)return;const mes=document.getElementById('imes').value,year=parseInt(document.getElementById('iyr').value)||new Date().getFullYear();const btn=document.getElementById('btnm'),sp=document.getElementById('spm'),lb=document.getElementById('lblm');btn.disabled=true;sp.style.display='inline-block';lb.textContent='Procesando...';setP(true,`Procesando ${cap(mes)} ${year}...`);try{const r=await fetch(`${BASE}/api/process-month`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mes,year})});const d=await r.json();if(d.status==='ya_ejecutando'){log(d.message,'warning');setP(false);}else{log(`🚀 ${cap(mes)} ${year}`,'success');}setTimeout(()=>{loadStats();loadInvoices();loadStatus();},15000);setTimeout(()=>{loadStats();loadInvoices();},45000);setTimeout(()=>{setP(false);btn.disabled=false;sp.style.display='none';lb.textContent='▶ Procesar este mes';loadStats();loadInvoices();loadMonths();},180000);}catch(e){log(`Error: ${e.message}`,'error');setP(false);btn.disabled=false;sp.style.display='none';lb.textContent='▶ Procesar este mes';}}
 
@@ -544,45 +528,21 @@ async function clearTerm(){document.getElementById('term').innerHTML=`<div class
 
 async function exportExcel(){try{const r=await fetch(`${BASE}/api/export-excel`,{method:'POST'});if(r.ok){const b=await r.blob(),u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download=`facturas_${new Date().toISOString().split('T')[0]}.xlsx`;document.body.appendChild(a);a.click();URL.revokeObjectURL(u);a.remove();log('Excel exportado','success');}}catch(e){log(`Error: ${e.message}`,'error');}}
 
-// ── CHAT ──────────────────────────────────────────────────────────────────────
 function toggleC(){const f=document.getElementById('cfab'),w=document.getElementById('cwin');f.classList.toggle('open');w.classList.toggle('open');f.textContent=w.classList.contains('open')?'×':'🤖';if(w.classList.contains('open'))document.getElementById('cinp').focus();}
 async function clearC(){try{await fetch(`${BASE}/api/chat/${SID}`,{method:'DELETE'});}catch{}document.getElementById('cmsgbox').innerHTML=`<div class="cm ast"><span class="cmw">Claude</span><div class="cmb">Chat reiniciado. ¿En qué te ayudo?</div></div>`;}
 function addM(who,txt){const b=document.getElementById('cmsgbox');const d=document.createElement('div');d.className=`cm ${who==='user'?'user':'ast'}`;d.innerHTML=`<span class="cmw">${who==='user'?'Tú':'Claude'}</span><div class="cmb">${esc(txt)}</div>`;b.appendChild(d);b.scrollTop=b.scrollHeight;}
 function showTyp(){const b=document.getElementById('cmsgbox');const d=document.createElement('div');d.id='typ';d.className='cm ast';d.innerHTML=`<span class="cmw">Claude</span><div class="cmb"><div class="typdots"><div class="td"></div><div class="td"></div><div class="td"></div></div></div>`;b.appendChild(d);b.scrollTop=b.scrollHeight;}
-async function sendM(){const inp=document.getElementById('cinp'),btn=document.getElementById('bsend');const msg=inp.value.trim();if(!msg)return;addM('user',msg);inp.value='';inp.style.height='auto';btn.disabled=true;inp.disabled=true;showTyp();try{const r=await fetch(`${BASE}/api/chat`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,session_id:SID})});const d=await r.json();const el=document.getElementById('typ');if(el)el.remove();addM('ast',d.error||d.response||'Sin respuesta');
-
-    if(d.intent==='update_status'){
-      // Refrescar tabla y stats para mostrar el nuevo estado
-      const ur=d.update_result;
-      if(ur&&ur.ok){
-        showToast(`✅ ${ur.estado} actualizado desde el chat`,'ok');
-        setTimeout(()=>{loadStats();loadInvoices();},800);
-      }
-    } else if(d.intent==='process_month'&&d.mes){setTimeout(async()=>{try{const rp=await fetch(`${BASE}/api/process-month`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mes:d.mes,year:d.year||new Date().getFullYear()})});const dp=await rp.json();if(dp.status==='iniciado'){setP(true,`Procesando ${cap(d.mes)}...`);log(`🚀 ${cap(d.mes)} via chat`,'success');setTimeout(()=>{loadStats();loadInvoices();},10000);}}catch{}},1200);}else if(d.intent==='process_emails'){setTimeout(()=>triggerProc(),1200);}
-
-  }catch(e){const el=document.getElementById('typ');if(el)el.remove();addM('ast',`Error: ${e.message}`);}finally{btn.disabled=false;inp.disabled=false;inp.focus();}}
+async function sendM(){const inp=document.getElementById('cinp'),btn=document.getElementById('bsend');const msg=inp.value.trim();if(!msg)return;addM('user',msg);inp.value='';inp.style.height='auto';btn.disabled=true;inp.disabled=true;showTyp();try{const r=await fetch(`${BASE}/api/chat`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,session_id:SID})});const d=await r.json();const el=document.getElementById('typ');if(el)el.remove();addM('ast',d.error||d.response||'Sin respuesta');if(d.intent==='process_month'&&d.mes){setTimeout(async()=>{try{const rp=await fetch(`${BASE}/api/process-month`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mes:d.mes,year:d.year||new Date().getFullYear()})});const dp=await rp.json();if(dp.status==='iniciado'){setP(true,`Procesando ${cap(d.mes)}...`);log(`🚀 ${cap(d.mes)} via chat`,'success');setTimeout(()=>{loadStats();loadInvoices();},10000);}}catch{}},1200);}else if(d.intent==='process_emails'){setTimeout(()=>triggerProc(),1200);}}catch(e){const el=document.getElementById('typ');if(el)el.remove();addM('ast',`Error: ${e.message}`);}finally{btn.disabled=false;inp.disabled=false;inp.focus();}}
 document.getElementById('cinp').addEventListener('input',function(){this.style.height='auto';this.style.height=Math.min(this.scrollHeight,100)+'px';});
 document.getElementById('cinp').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendM();}});
 
-// ── WEBSOCKET ─────────────────────────────────────────────────────────────────
 function setOnline(m){const p=document.getElementById('wsp'),t=document.getElementById('wst'),b=document.getElementById('ban-off');if(m==='ws'||m==='http'){p.className='ws-pill on';t.textContent=m==='ws'?'En línea':'HTTP';b.classList.remove('show');}else{p.className='ws-pill';t.textContent='Offline';b.classList.add('show');}}
 function startHTTP(){if(hpoll)return;setOnline('http');hpoll=setInterval(async()=>{try{const r=await fetch(`${BASE}/api/logs`);if(!r.ok)return;const d=await r.json();const ls=Array.isArray(d)?d:(d.logs||[]);ls.slice(lCnt).forEach(l=>{if(l.message){log(l.message,l.level,l.timestamp);setPipe(l.message);}if(/completado|guardada|exitosamente/i.test(l.message||''))setTimeout(()=>{loadStats();loadInvoices();},2000);});lCnt=ls.length;setOnline('http');}catch{setOnline('offline');}},3500);}
 function stopHTTP(){if(hpoll){clearInterval(hpoll);hpoll=null;}}
 function connectWS(){if(ws&&ws.readyState<2)return;if(wsFail>=3){startHTTP();return;}try{ws=new WebSocket(`${WS}/ws/logs`);}catch{wsFail++;schedR();return;}ws.onopen=()=>{reN=0;wsFail=0;stopHTTP();setOnline('ws');log('Conectado','success');};ws.onmessage=e=>{try{const d=JSON.parse(e.data);if(d.level==='ping'||!d.message)return;log(d.message,d.level,d.timestamp);setPipe(d.message);if(/completado|guardada|exitosamente/i.test(d.message))setTimeout(()=>{loadStats();loadInvoices();},2000);}catch{};};ws.onerror=()=>{};ws.onclose=()=>{wsFail++;if(wsFail>=3)startHTTP();else{setOnline('offline');schedR();}};}
 function schedR(){if(reTmr)clearTimeout(reTmr);reN++;reTmr=setTimeout(connectWS,Math.min(2000*reN,12000));}
 
-async function init(){
-  const nowM=new Date().getMonth(),nowY=new Date().getFullYear();
-  document.getElementById('nav-mes').value=MES[nowM];
-  document.getElementById('nav-yr').value=nowY;
-  document.getElementById('imes').value=MES[nowM];
-  document.getElementById('iyr').value=nowY;
-  await Promise.all([loadMonths(),loadStats(),loadInvoices(),loadSched(),loadStatus()]);
-  connectWS();
-  setInterval(()=>{loadStats();loadInvoices();},120000);
-  setInterval(loadStatus,15000);
-  setInterval(loadMonths,300000);
-}
+async function init(){const nowM=new Date().getMonth(),nowY=new Date().getFullYear();document.getElementById('nav-mes').value=MES[nowM];document.getElementById('nav-yr').value=nowY;document.getElementById('imes').value=MES[nowM];document.getElementById('iyr').value=nowY;await Promise.all([loadMonths(),loadStats(),loadInvoices(),loadSched(),loadStatus()]);connectWS();setInterval(()=>{loadStats();loadInvoices();},120000);setInterval(loadStatus,15000);setInterval(loadMonths,300000);}
 document.addEventListener('DOMContentLoaded',init);
 </script>
 </body>
