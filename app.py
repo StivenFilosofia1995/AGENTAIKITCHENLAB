@@ -1,10 +1,4 @@
- (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/app.py b/app.py
-index 9e42d6b1a6a848f6ec48dd2cf5c8e955bcf62c37..801548892a63d219ba15d5125d3b9d1adf191619 100644
---- a/app.py
-+++ b/app.py
-@@ -1,46 +1,47 @@
- """
+"""
  Módulo agente de extracción de facturas.
  - Conexión IMAP a Gmail
  - Extracción de datos con Claude AI (Anthropic)
