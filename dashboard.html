@@ -44,6 +44,7 @@ body{font-family:var(--font);background:var(--paper);color:var(--ink);font-size:
 .ban{display:none;align-items:center;gap:12px;padding:10px 28px;font-size:13px;font-weight:500;border-bottom:1px solid;flex-shrink:0;}
 .ban.show{display:flex;}
 .ban-err{background:var(--red-bg);border-color:var(--red-mid);color:var(--red);}
+.ban-err-proc{background:#1e0a0a;border-color:#7f1d1d;color:#fca5a5;}
 .ban-inf{background:var(--em-bg);border-color:var(--em-mid);color:var(--em);}
 .ban-cls{margin-left:auto;cursor:pointer;font-size:18px;opacity:.5;background:none;border:none;color:inherit;padding:0 4px;}
 
@@ -300,6 +301,11 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:20px 0;}
   <span id="bpt">Claude AI procesando facturas...</span>
   <button class="ban-cls" onclick="this.closest('.ban').classList.remove('show')">×</button>
 </div>
+<div class="ban ban-err-proc" id="ban-err-proc" style="background:#fef2f2;border-color:#fecaca;color:#dc2626;">
+  <span>🚨</span>
+  <span id="ban-err-msg">Error en el sistema</span>
+  <button class="ban-cls" onclick="this.closest('.ban').classList.remove('show')">×</button>
+</div>
 
 <div class="prog" id="prog">
   <div class="prog-steps">
@@ -470,6 +476,7 @@ const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'
 
 let rows=[],aMes=null,sf='all',proc=false,selMode='interval',selMin=15;
 let ws=null,reN=0,reTmr=null,wsFail=0,hpoll=null,lCnt=0;
+let _pollInt=null,_lastToken=null;
 
 function goPage(n,el){document.querySelectorAll('.ntab').forEach(t=>t.classList.remove('on'));if(el)el.classList.add('on');document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));document.getElementById('page-'+n).classList.add('on');}
 
@@ -490,9 +497,46 @@ function pN(v){if(!v||v==='N/A'||v==='')return null;const n=parseFloat(String(v)
 
 function renderR(rs){const tb=document.getElementById('tb'),th=document.getElementById('th');document.getElementById('tcnt').textContent=`${rs.length} resultado${rs.length!==1?'s':''}`;if(!rs.length){th.innerHTML='';const q=document.getElementById('si').value;tb.innerHTML=`<tr><td colspan="27"><div class="empty-t"><div class="ei">${q||sf!=='all'?'🔎':'🧾'}</div><p>${q||sf!=='all'?'Sin resultados para este filtro':'Sin facturas aún'}</p>${!q&&sf==='all'?'<p class="ht">Pulsa <strong>▶ Procesar</strong> para que el agente busque facturas en tu correo</p>':''}</div></td></tr>`;return;}const cols=Object.keys(rs[0]);th.innerHTML=cols.map(c=>`<th>${esc(c)}</th>`).join('');const badge=s=>{const u=(s||'').toString().toUpperCase();const[cl,lb]=u==='PENDIENTE'?['bpend','Pendiente']:u==='PAGADA'?['bpag','Pagada']:u==='VENCIDA'?['bvenc','Vencida']:['bdef',u||'N/A'];return`<span class="badge ${cl}"><span class="bd"></span>${lb}</span>`;};const cell=(c,v)=>{const s=v==null?'N/A':String(v);if(c==='Estado')return`<td>${badge(s)}</td>`;if(c==='Número Factura')return`<td style="color:var(--em);font-weight:700">${esc(s)}</td>`;if(c==='Proveedor'||c==='Nombre Proveedor')return`<td style="font-weight:600;color:var(--ink)">${esc(s)}</td>`;if(c==='Mes')return`<td style="color:var(--ink4);font-size:11px">${esc(s)}</td>`;if(NC.has(c)){const n=pN(s);if(n&&n!==0){const x=c==='Valor Total'?'color:var(--em);font-weight:700':c.startsWith('Rete')||c==='IVA'?'color:var(--amb)':'color:var(--ink2);font-weight:500';return`<td style="${x}">${fN(n)}</td>`;}return`<td style="color:var(--ink4)">—</td>`;}return`<td>${esc(s)}</td>`;};tb.innerHTML=rs.map(r=>`<tr>${cols.map(c=>cell(c,r[c])).join('')}</tr>`).join('');}
 
-async function triggerProc(){if(proc)return;const mes=MES[new Date().getMonth()],year=new Date().getFullYear();setP(true,`Procesando ${cap(mes)} ${year}...`);try{const r=await fetch(`${BASE}/api/process-month`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mes,year})});const d=await r.json();if(d.status==='ya_ejecutando'){log(d.message,'warning');setP(false);return;}log(`🚀 Procesando ${cap(mes)} ${year}`,'success');setTimeout(()=>{loadStats();loadInvoices();},10000);setTimeout(()=>{setP(false);loadStats();loadInvoices();},65000);}catch(e){log(`Error: ${e.message}`,'error');setP(false);}}
+async function triggerProc(){
+  if(proc)return;
+  const mes=MES[new Date().getMonth()],year=new Date().getFullYear();
+  setP(true,`Procesando ${cap(mes)} ${year}...`);
+  try{
+    const r=await fetch(`${BASE}/api/process-month`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mes,year})});
+    const d=await r.json();
+    if(d.status==='ya_ejecutando'){
+      log(d.message,'warning');setP(false);
+      showErrBan('Ya hay un proceso activo. Espera que termine antes de volver a intentar.');
+      return;
+    }
+    log(`🚀 Procesando ${cap(mes)} ${year}`,'success');
+    startCompletionPoll();
+  }catch(e){log(`❌ Error de red: ${e.message}`,'error');setP(false);showErrBan('Error de conexión con el servidor.');}
+}
 
-async function triggerM(){if(proc)return;const mes=document.getElementById('imes').value,year=parseInt(document.getElementById('iyr').value)||new Date().getFullYear();const btn=document.getElementById('btnm'),sp=document.getElementById('spm'),lb=document.getElementById('lblm');btn.disabled=true;sp.style.display='inline-block';lb.textContent='Procesando...';setP(true,`Procesando ${cap(mes)} ${year}...`);try{const r=await fetch(`${BASE}/api/process-month`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mes,year})});const d=await r.json();if(d.status==='ya_ejecutando'){log(d.message,'warning');setP(false);}else{log(`🚀 ${cap(mes)} ${year}`,'success');}setTimeout(()=>{loadStats();loadInvoices();loadStatus();},10000);setTimeout(()=>{setP(false);btn.disabled=false;sp.style.display='none';lb.textContent='▶ Procesar este mes';loadStats();loadInvoices();},65000);}catch(e){log(`Error: ${e.message}`,'error');setP(false);btn.disabled=false;sp.style.display='none';lb.textContent='▶ Procesar este mes';}}
+async function triggerM(){
+  if(proc)return;
+  const mes=document.getElementById('imes').value,year=parseInt(document.getElementById('iyr').value)||new Date().getFullYear();
+  const btn=document.getElementById('btnm'),sp=document.getElementById('spm'),lb=document.getElementById('lblm');
+  btn.disabled=true;sp.style.display='inline-block';lb.textContent='Procesando...';
+  setP(true,`Procesando ${cap(mes)} ${year}...`);
+  try{
+    const r=await fetch(`${BASE}/api/process-month`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mes,year})});
+    const d=await r.json();
+    if(d.status==='ya_ejecutando'){
+      log(d.message,'warning');setP(false);
+      btn.disabled=false;sp.style.display='none';lb.textContent='▶ Procesar este mes';
+      showErrBan('Ya hay un proceso activo. Espera que termine.');
+      return;
+    }
+    log(`🚀 ${cap(mes)} ${year}`,'success');
+    startCompletionPoll(()=>{btn.disabled=false;sp.style.display='none';lb.textContent='▶ Procesar este mes';});
+  }catch(e){
+    log(`❌ Error: ${e.message}`,'error');setP(false);
+    btn.disabled=false;sp.style.display='none';lb.textContent='▶ Procesar este mes';
+    showErrBan('Error de conexión con el servidor.');
+  }
+}
 
 function setP(on,msg=''){proc=on;const pr=document.getElementById('prog'),bp=document.getElementById('ban-proc'),btn=document.getElementById('btnp'),sp=document.getElementById('spbtn'),lb=document.getElementById('lblbtn');if(on){pr.classList.add('show');bp.classList.add('show');document.getElementById('bpt').textContent=msg||'Claude AI procesando...';btn.disabled=true;sp.style.display='inline-block';lb.textContent='Procesando...';}else{pr.classList.remove('show');bp.classList.remove('show');btn.disabled=false;sp.style.display='none';lb.textContent='▶ Procesar';}}
 
@@ -507,7 +551,71 @@ async function applyS(){document.getElementById('stog').checked=true;const cfg={
 function updS(s){const el=document.getElementById('sest');if(s.enabled){el.textContent='Activo';el.style.color='var(--em)';}else{el.textContent='Inactivo';el.style.color='var(--ink4)';}document.getElementById('snxt').textContent=s.next_run||'—';document.getElementById('slst').textContent=s.last_run||'—';document.getElementById('stog').checked=!!s.enabled;}
 async function loadSched(){try{const r=await fetch(`${BASE}/api/scheduler`);if(!r.ok)return;const d=await r.json();updS(d);if(d.mode==='daily')pickF(document.querySelector('[data-mode=daily]'));else if(d.interval_minutes){const o=[...document.querySelectorAll('.fi[data-mode=interval]')].find(x=>parseInt(x.dataset.mins)===d.interval_minutes);if(o)pickF(o);}}catch{}}
 
-async function loadStatus(){try{const r=await fetch(`${BASE}/api/status`);if(!r.ok)return;const d=await r.json();document.getElementById('plvr').textContent=d.procesando?'Sí ⚡':'No';document.getElementById('plvr').style.color=d.procesando?'var(--amb)':'var(--ink4)';document.getElementById('plvm').textContent=d.modelo||'—';document.getElementById('plvv').textContent=d.version||'—';if(d.procesando&&!proc)setP(true,'Procesamiento en curso...');if(!d.procesando&&proc)setP(false);}catch{}}
+async function loadStatus(){
+  try{
+    const r=await fetch(`${BASE}/api/status`);if(!r.ok)return;
+    const d=await r.json();
+    document.getElementById('plvr').textContent=d.procesando?'Sí ⚡':'No';
+    document.getElementById('plvr').style.color=d.procesando?'var(--amb)':'var(--ink4)';
+    document.getElementById('plvm').textContent=d.modelo||'—';
+    document.getElementById('plvv').textContent=d.version||'—';
+    // Mostrar error si lo hay
+    if(d.last_error) showErrBan(d.last_error);
+    // Sheets health
+    if(d.sheets_ok===false) showErrBan('Google Sheets desconectado — verifica permisos del service_account.');
+    if(d.anthropic_ok===false) showErrBan('API de Anthropic no responde — verifica ANTHROPIC_API_KEY en el .env.');
+    // Sync estado de procesamiento
+    if(d.procesando&&!proc) setP(true,'Procesamiento en curso...');
+    if(!d.procesando&&proc) setP(false);
+  }catch{}
+}
+
+/* ── Smart completion polling (reemplaza los setTimeout ciegos de 65s) ── */
+function startCompletionPoll(onDone){
+  if(_pollInt) clearInterval(_pollInt);
+  _lastToken = null;
+  _pollInt = setInterval(async()=>{
+    try{
+      const r=await fetch(`${BASE}/api/status`);if(!r.ok)return;
+      const d=await r.json();
+      // Detectar error en medio del proceso
+      if(d.last_error && d.last_error_time){
+        const errT=new Date(d.last_error_time).getTime();
+        if(Date.now()-errT < 120000){ // error de los últimos 2 min
+          showErrBan(d.last_error);
+        }
+      }
+      // Saber cuándo terminó: completion_token cambia
+      if(_lastToken===null) _lastToken=d.completion_token;
+      else if(d.completion_token !== _lastToken){
+        // El proceso terminó
+        clearInterval(_pollInt);_pollInt=null;
+        setP(false);
+        loadStats();loadInvoices();loadMonths();
+        if(onDone) onDone();
+        const n=d.facturas_ultimo_run||0;
+        if(!d.last_error){
+          log(`✅ Proceso finalizado — ${n} factura${n!==1?'s':''} guardadas`,'success');
+        }
+      }
+      // Si el servidor dice que ya no está procesando y no hubo token change (edge case)
+      if(!d.procesando && _lastToken!==null && d.completion_token===_lastToken){
+        clearInterval(_pollInt);_pollInt=null;
+        setP(false);loadStats();loadInvoices();
+        if(onDone) onDone();
+      }
+    }catch{}
+  },4000);
+}
+
+/* ── Banner de error con auto-dismiss ─────────────────────────────────── */
+function showErrBan(msg){
+  const b=document.getElementById('ban-err-proc');
+  if(!b)return;
+  document.getElementById('ban-err-msg').textContent=msg;
+  b.classList.add('show');
+  setTimeout(()=>b.classList.remove('show'),12000);
+}
 
 function log(msg,lvl,ts){if(!msg||!msg.trim())return;const t=document.getElementById('term');const d=document.createElement('div');d.className=`lg ${lvl||'info'}`;d.innerHTML=`<span class="lt">${ts||nts()}</span><span class="lm">${esc(msg)}</span>`;t.appendChild(d);t.scrollTop=t.scrollHeight;}
 async function clearTerm(){document.getElementById('term').innerHTML=`<div class="lg info"><span class="lt">${nts()}</span><span class="lm">Terminal limpiado.<span class="cur"></span></span></div>`;try{await fetch(`${BASE}/api/logs`,{method:'DELETE'});}catch{}}
@@ -518,7 +626,7 @@ function toggleC(){const f=document.getElementById('cfab'),w=document.getElement
 async function clearC(){try{await fetch(`${BASE}/api/chat/${SID}`,{method:'DELETE'});}catch{}document.getElementById('cmsgbox').innerHTML=`<div class="cm ast"><span class="cmw">Claude</span><div class="cmb">Chat reiniciado. ¿En qué te ayudo?</div></div>`;}
 function addM(who,txt){const b=document.getElementById('cmsgbox');const d=document.createElement('div');d.className=`cm ${who==='user'?'user':'ast'}`;d.innerHTML=`<span class="cmw">${who==='user'?'Tú':'Claude'}</span><div class="cmb">${esc(txt)}</div>`;b.appendChild(d);b.scrollTop=b.scrollHeight;}
 function showTyp(){const b=document.getElementById('cmsgbox');const d=document.createElement('div');d.id='typ';d.className='cm ast';d.innerHTML=`<span class="cmw">Claude</span><div class="cmb"><div class="typdots"><div class="td"></div><div class="td"></div><div class="td"></div></div></div>`;b.appendChild(d);b.scrollTop=b.scrollHeight;}
-async function sendM(){const inp=document.getElementById('cinp'),btn=document.getElementById('bsend');const msg=inp.value.trim();if(!msg)return;addM('user',msg);inp.value='';inp.style.height='auto';btn.disabled=true;inp.disabled=true;showTyp();try{const r=await fetch(`${BASE}/api/chat`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,session_id:SID})});const d=await r.json();const el=document.getElementById('typ');if(el)el.remove();addM('ast',d.error||d.response||'Sin respuesta');if(d.intent==='process_month'&&d.mes){setTimeout(async()=>{try{const rp=await fetch(`${BASE}/api/process-month`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mes:d.mes,year:d.year||new Date().getFullYear()})});const dp=await rp.json();if(dp.status==='iniciado'){setP(true,`Procesando ${cap(d.mes)}...`);log(`🚀 ${cap(d.mes)} via chat`,'success');setTimeout(()=>{loadStats();loadInvoices();},10000);}}catch{}},1200);}else if(d.intent==='process_emails'){setTimeout(()=>triggerProc(),1200);}}catch(e){const el=document.getElementById('typ');if(el)el.remove();addM('ast',`Error: ${e.message}`);}finally{btn.disabled=false;inp.disabled=false;inp.focus();}}
+async function sendM(){const inp=document.getElementById('cinp'),btn=document.getElementById('bsend');const msg=inp.value.trim();if(!msg)return;addM('user',msg);inp.value='';inp.style.height='auto';btn.disabled=true;inp.disabled=true;showTyp();try{const r=await fetch(`${BASE}/api/chat`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,session_id:SID})});const d=await r.json();const el=document.getElementById('typ');if(el)el.remove();addM('ast',d.error||d.response||'Sin respuesta');if(d.intent==='process_month'&&d.mes){setTimeout(async()=>{try{const rp=await fetch(`${BASE}/api/process-month`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mes:d.mes,year:d.year||new Date().getFullYear()})});const dp=await rp.json();if(dp.status==='iniciado'){setP(true,`Procesando ${cap(d.mes)}...`);log(`🚀 ${cap(d.mes)} via chat`,'success');startCompletionPoll();}}}catch{}},1200);}else if(d.intent==='process_emails'){setTimeout(()=>triggerProc(),1200);}}catch(e){const el=document.getElementById('typ');if(el)el.remove();addM('ast',`Error: ${e.message}`);}finally{btn.disabled=false;inp.disabled=false;inp.focus();}}
 document.getElementById('cinp').addEventListener('input',function(){this.style.height='auto';this.style.height=Math.min(this.scrollHeight,100)+'px';});
 document.getElementById('cinp').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendM();}});
 
