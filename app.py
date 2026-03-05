@@ -19,6 +19,7 @@ from email.header import decode_header
 import base64
 import io
 import re
+import unicodedata
 from datetime import datetime
 from typing import Optional
 
@@ -214,6 +215,13 @@ _MES_NUM = {
     "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
     "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12
 }
+
+
+def _normalize_mes_nombre(mes_nombre: str) -> str:
+    """Normaliza variantes de mes (acentos, espacios, setiembre→septiembre)."""
+    txt = unicodedata.normalize("NFKD", str(mes_nombre or ""))
+    txt = "".join(c for c in txt if not unicodedata.combining(c)).lower().strip()
+    return "septiembre" if txt == "setiembre" else txt
 # Nombres en inglés para IMAP (formato requerido: "01-Jan-2026")
 _MES_EN = {
     1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
@@ -224,7 +232,7 @@ _MES_EN = {
 def search_emails_by_month(mail: imaplib.IMAP4_SSL, mes_nombre: str, year: int = None) -> list:
     """Busca en Gmail TODOS los correos del mes usando IMAP SINCE/BEFORE, revisando All Mail."""
     import calendar
-    mes_nombre = mes_nombre.lower().strip()
+    mes_nombre = _normalize_mes_nombre(mes_nombre)
     mes_num = _MES_NUM.get(mes_nombre)
     if not mes_num:
         print(f"❌ Mes no reconocido: {mes_nombre}")
@@ -273,7 +281,8 @@ def process_emails_for_month(mes_nombre: str, year: int = None):
         print("❌ ANTHROPIC_API_KEY no configurada en .env")
         return
 
-    mes_nombre_cap = mes_nombre.strip().capitalize()
+    mes_normalizado = _normalize_mes_nombre(mes_nombre)
+    mes_nombre_cap = mes_normalizado.capitalize()
     if year is None:
         year = datetime.now().year
 
@@ -287,7 +296,7 @@ def process_emails_for_month(mes_nombre: str, year: int = None):
         print(f"❌ Error de conexión IMAP: {e}")
         return
 
-    email_ids = search_emails_by_month(mail, mes_nombre, year)
+    email_ids = search_emails_by_month(mail, mes_normalizado, year)
     if not email_ids:
         print(f"📭 No se encontraron correos en {mes_nombre_cap} {year}")
         return
@@ -837,7 +846,10 @@ def _validate_invoice_data(datos: dict, subject: str = "") -> tuple[bool, str]:
         print(f"⚠️  Factura {numero} tiene valor_total=0. Verificar manualmente.")
 
     return True, ""
-                           proveedor: str = None, fecha: str = None) -> tuple:
+
+
+def _is_duplicate_invoice(numero_factura: str, mes_nombre: str,
+                          proveedor: str = None, fecha: str = None) -> tuple:
     """Busca la factura en TODAS las hojas mensuales.
     Retorna (encontrado: bool, fila_num: int, worksheet_object).
     Cuando numero_factura es N/A usa clave compuesta proveedor+fecha como fallback."""

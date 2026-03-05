@@ -22,7 +22,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from starlette.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-import asyncio, threading, json, os, schedule, time, sys, io, re
+import asyncio, threading, json, os, schedule, time, sys, io, re, unicodedata
 from datetime import datetime
 from typing import List, Dict, Optional
 import pandas as pd
@@ -85,6 +85,15 @@ class LogCapture(io.TextIOBase):
 
 
 # ── ESTADO SCHEDULER ──────────────────────────────────────────────────────────
+
+
+def _normalize_month_input(mes: str) -> str:
+    """Normaliza nombres de mes para aceptar acentos y variantes comunes."""
+    txt = unicodedata.normalize("NFKD", str(mes or ""))
+    txt = "".join(c for c in txt if not unicodedata.combining(c)).lower().strip()
+    return "septiembre" if txt == "setiembre" else txt
+
+
 scheduler_state = {
     "enabled": False,
     "mode": "interval",
@@ -459,7 +468,7 @@ async def trigger_process():
 
 @fastapi_app.post("/api/process-month")
 async def trigger_process_month(body: dict):
-    mes  = body.get("mes", "").strip()
+    mes  = _normalize_month_input(body.get("mes", ""))
     year = int(body.get("year", datetime.now().year))
     if not mes:
         return {"status": "error", "message": "Debes indicar el mes"}
@@ -595,8 +604,9 @@ NORMAS:
             "julio": "julio", "agosto": "agosto", "septiembre": "septiembre",
             "octubre": "octubre", "noviembre": "noviembre", "diciembre": "diciembre"
         }
+        lower_msg_norm = _normalize_month_input(lower_msg)
         for mes_es in meses_map:
-            if mes_es in lower_msg:
+            if mes_es in lower_msg_norm:
                 intent_mes = mes_es
                 break
 
