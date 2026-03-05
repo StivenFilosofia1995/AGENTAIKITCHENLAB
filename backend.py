@@ -93,6 +93,13 @@ scheduler_state = {
     "next_run": None,
     "last_run": None,
     "running": False,
+    # ── v5.2 error tracking ──────────────────────────────────────────────
+    "last_error": None,           # Último mensaje de error (None si todo OK)
+    "last_error_time": None,      # Timestamp del último error
+    "sheets_ok": None,            # True/False/None (None = no chequeado aún)
+    "anthropic_ok": None,         # True/False/None
+    "facturas_ultimo_run": 0,     # Facturas guardadas en el último procesamiento
+    "completion_token": 0,        # Incrementa cada vez que termina un proceso — el dashboard lo compara para saber cuándo terminó
 }
 _scheduler_thread: Optional[threading.Thread] = None
 _scheduler_stop = threading.Event()
@@ -114,6 +121,7 @@ def _run_month_processing(mes: str, year: int):
             return False
         scheduler_state["running"] = True
         scheduler_state["last_run"] = datetime.now().strftime("%H:%M %d/%m/%Y")
+        scheduler_state["last_error"] = None  # limpiar error anterior
 
     processed_path = getattr(app_module, "PROCESSED_FILE", "processed_emails.json")
     backup_ids = set()
@@ -132,13 +140,58 @@ def _run_month_processing(mes: str, year: int):
         log_store.add_log(f"🤖 Modelo: {app_module.CLAUDE_MODEL}", "info")
         log_store.add_log(f"📅 Procesando: {mes.capitalize()} {year}", "info")
 
+        # ── [v5.2] Verificar Google Sheets antes de arrancar ──────────────
+        try:
+            app_module.setup_sheets()
+            scheduler_state["sheets_ok"] = True
+        except Exception as e_sheets:
+            msg = f"❌ No se pudo conectar a Google Sheets: {e_sheets}"
+            log_store.add_log(msg, "error")
+            log_store.add_log("Verifica el archivo service_account.json y los permisos del Sheet", "error")
+            scheduler_state["sheets_ok"] = False
+            scheduler_state["last_error"] = msg
+            scheduler_state["last_error_time"] = datetime.now().isoformat()
+            return False
+
+        # ── [v5.2] Verificar API key de Anthropic ─────────────────────────
+        if not getattr(app_module, "ANTHROPIC_API_KEY", ""):
+            msg = "❌ ANTHROPIC_API_KEY no está configurada en las variables de entorno"
+            log_store.add_log(msg, "error")
+            scheduler_state["anthropic_ok"] = False
+            scheduler_state["last_error"] = msg
+            scheduler_state["last_error_time"] = datetime.now().isoformat()
+            return False
+        scheduler_state["anthropic_ok"] = True
+
         app_module.process_emails_for_month(mes, year)
         invalidate_sheets_cache()
 
+        # Contar facturas guardadas en este run (leyendo logs recientes)
+        recent_logs = log_store.get_logs()
+        facturas = sum(1 for l in recent_logs if "Factura guardada" in l.get("message", ""))
+        scheduler_state["facturas_ultimo_run"] = facturas
+        log_store.add_log(f"✅ Procesamiento completado — {facturas} facturas nuevas guardadas", "success")
+
     except Exception as e:
         import traceback
-        log_store.add_log(f"Error en procesamiento: {str(e)}", "error")
-        log_store.add_log(traceback.format_exc(), "error")
+        tb = traceback.format_exc()
+        # [v5.2] Detectar tipos de error conocidos para dar mensajes útiles
+        err_str = str(e)
+        if "529" in err_str or "overloaded" in err_str.lower():
+            msg = "❌ Anthropic API sobrecargada (error 529). Intenta en unos minutos."
+        elif "quota" in err_str.lower() or "429" in err_str:
+            msg = "❌ Google Sheets cuota excedida. El retry automático falló — intenta más tarde."
+        elif "auth" in err_str.lower() or "credential" in err_str.lower():
+            msg = "❌ Error de autenticación con Google. Verifica service_account.json."
+            scheduler_state["sheets_ok"] = False
+        elif "imap" in err_str.lower() or "login" in err_str.lower():
+            msg = "❌ Error de conexión a Gmail. Verifica EMAIL_USER y EMAIL_PASS en el .env."
+        else:
+            msg = f"❌ Error en procesamiento: {err_str[:120]}"
+        log_store.add_log(msg, "error")
+        scheduler_state["last_error"] = msg
+        scheduler_state["last_error_time"] = datetime.now().isoformat()
+        log_store.add_log(tb[:800], "error")
     finally:
         sys.stdout = old_stdout
         # Restaurar IDs previos + nuevos detectados en esta ejecución
@@ -151,9 +204,10 @@ def _run_month_processing(mes: str, year: int):
                 json.dump(list(backup_ids | new_ids), f)
         except Exception:
             pass
-        # [FIX 1] Liberar flag con lock
+        # [FIX 1] Liberar flag con lock + incrementar completion_token
         with _process_lock:
             scheduler_state["running"] = False
+            scheduler_state["completion_token"] = scheduler_state.get("completion_token", 0) + 1
 
     return True
 
@@ -431,15 +485,22 @@ async def clear_logs():
 @fastapi_app.get("/api/status")
 async def get_status():
     return {
-        "agente":         "activo",
-        "version":        "5.1.0",
-        "almacenamiento": "google_sheets",
-        "sheets_id":      app_module.GOOGLE_SHEETS_ID,
-        "procesando":     scheduler_state["running"],
-        "clientes_ws":    len(connected_clients),
-        "modelo":         app_module.CLAUDE_MODEL,
-        "timestamp":      datetime.now().isoformat(),
-        "logs_totales":   len(log_store.get_logs()),
+        "agente":               "activo",
+        "version":              "5.2.0",
+        "almacenamiento":       "google_sheets",
+        "sheets_id":            app_module.GOOGLE_SHEETS_ID,
+        "procesando":           scheduler_state["running"],
+        "clientes_ws":          len(connected_clients),
+        "modelo":               app_module.CLAUDE_MODEL,
+        "timestamp":            datetime.now().isoformat(),
+        "logs_totales":         len(log_store.get_logs()),
+        # ── v5.2 health / error ──────────────────────────────────────────
+        "sheets_ok":            scheduler_state["sheets_ok"],
+        "anthropic_ok":         scheduler_state["anthropic_ok"],
+        "last_error":           scheduler_state["last_error"],
+        "last_error_time":      scheduler_state["last_error_time"],
+        "facturas_ultimo_run":  scheduler_state["facturas_ultimo_run"],
+        "completion_token":     scheduler_state["completion_token"],
     }
 
 
